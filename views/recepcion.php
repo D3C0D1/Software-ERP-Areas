@@ -70,25 +70,38 @@ $recaudadoDia = 0;
 $facturadoDia = 0;
 
 if ($canViewReceptionMetrics) {
-    $hoy = date('Y-m-d');
+    // 1. Asegurar misma fecha en Hostinger y Local (Bogotá)
+    $hoy = (new DateTime('now', new DateTimeZone('America/Bogota')))->format('Y-m-d');
     
-    // Recaudado: suma de todos los movimientos en historial_pagos realizados hoy
+    // 2. Traer el mapeo de cobros del día para inyectarlo rápido en PHP (evita colapso por JOINs masivos)
+    $cobrosHoyDB = $db->query("SELECT pedido_id, SUM(monto) FROM historial_pagos WHERE DATE(fecha_pago) = '$hoy' GROUP BY pedido_id")->fetchAll(PDO::FETCH_KEY_PAIR);
+
+    // Recaudado
     $recaudadoDia = (float)$db->query("SELECT COALESCE(SUM(h.monto),0) FROM historial_pagos h JOIN pedidos p ON p.id = h.pedido_id WHERE DATE(h.fecha_pago) = '$hoy' AND p.estado!='cancelado'")->fetchColumn();
     $recaudadoEfectivo = (float)$db->query("SELECT COALESCE(SUM(h.monto),0) FROM historial_pagos h JOIN pedidos p ON p.id = h.pedido_id WHERE DATE(h.fecha_pago) = '$hoy' AND (h.metodo_pago='efectivo' OR h.metodo_pago IS NULL OR h.metodo_pago='') AND p.estado!='cancelado'")->fetchColumn();
     $recaudadoTransferencia = (float)$db->query("SELECT COALESCE(SUM(h.monto),0) FROM historial_pagos h JOIN pedidos p ON p.id = h.pedido_id WHERE DATE(h.fecha_pago) = '$hoy' AND h.metodo_pago='transferencia' AND p.estado!='cancelado'")->fetchColumn();
 
+    // Facturado
     $facturadoDia = (float)$db->query("SELECT COALESCE(SUM(total),0) FROM pedidos WHERE DATE(created_at) = '$hoy' AND estado!='cancelado'")->fetchColumn();
     $facturadoEfectivo = (float)$db->query("SELECT COALESCE(SUM(total),0) FROM pedidos WHERE DATE(created_at) = '$hoy' AND estado!='cancelado' AND metodo_pago='efectivo'")->fetchColumn();
     $facturadoTransferencia = (float)$db->query("SELECT COALESCE(SUM(total),0) FROM pedidos WHERE DATE(created_at) = '$hoy' AND estado!='cancelado' AND metodo_pago='transferencia'")->fetchColumn();
-    
-    // CxC del Día: Deuda pendiente generada exclusivamente por los pedidos creados el día de hoy
+
+    // CxC del Día
     $cxcDia = (float)$db->query("SELECT COALESCE(SUM(total - abonado),0) FROM pedidos WHERE DATE(created_at) = '$hoy' AND estado!='cancelado' AND estado_pago!='pago_completo' AND total>0")->fetchColumn();
     $cxcEfectivo = (float)$db->query("SELECT COALESCE(SUM(total - abonado),0) FROM pedidos WHERE DATE(created_at) = '$hoy' AND estado!='cancelado' AND estado_pago!='pago_completo' AND total>0 AND metodo_pago='efectivo'")->fetchColumn();
     $cxcTransferencia = (float)$db->query("SELECT COALESCE(SUM(total - abonado),0) FROM pedidos WHERE DATE(created_at) = '$hoy' AND estado!='cancelado' AND estado_pago!='pago_completo' AND total>0 AND metodo_pago='transferencia'")->fetchColumn();
 
+    // Consultas súper rápidas (como originalmente)
     $statLists['recaudado_dia'] = $db->query("SELECT p.*, COALESCE(a.nombre, 'Guía Generada') AS area_nombre FROM pedidos p LEFT JOIN areas a ON p.area_actual_id = a.id WHERE p.id IN (SELECT DISTINCT h.pedido_id FROM historial_pagos h WHERE DATE(h.fecha_pago) = '$hoy') AND p.estado!='cancelado' ORDER BY p.created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
     $statLists['recaudado_efectivo'] = $db->query("SELECT p.*, COALESCE(a.nombre, 'Guía Generada') AS area_nombre FROM pedidos p LEFT JOIN areas a ON p.area_actual_id = a.id WHERE p.id IN (SELECT DISTINCT h.pedido_id FROM historial_pagos h WHERE DATE(h.fecha_pago) = '$hoy' AND (h.metodo_pago='efectivo' OR h.metodo_pago IS NULL OR h.metodo_pago='')) AND p.estado!='cancelado' ORDER BY p.created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
     $statLists['recaudado_transferencia'] = $db->query("SELECT p.*, COALESCE(a.nombre, 'Guía Generada') AS area_nombre FROM pedidos p LEFT JOIN areas a ON p.area_actual_id = a.id WHERE p.id IN (SELECT DISTINCT h.pedido_id FROM historial_pagos h WHERE DATE(h.fecha_pago) = '$hoy' AND h.metodo_pago='transferencia') AND p.estado!='cancelado' ORDER BY p.created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
+
+    // Inyectar cobrado_hoy
+    foreach (['recaudado_dia', 'recaudado_efectivo', 'recaudado_transferencia'] as $k) {
+        foreach ($statLists[$k] as &$item) {
+            $item['cobrado_hoy'] = $cobrosHoyDB[$item['id']] ?? 0;
+        }
+    }
 
     $statLists['facturado_dia'] = $db->query("SELECT p.*, COALESCE(a.nombre, 'Guía Generada') AS area_nombre FROM pedidos p LEFT JOIN areas a ON p.area_actual_id = a.id WHERE DATE(p.created_at) = '$hoy' AND p.estado!='cancelado' ORDER BY p.created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
     $statLists['facturado_efectivo'] = $db->query("SELECT p.*, COALESCE(a.nombre, 'Guía Generada') AS area_nombre FROM pedidos p LEFT JOIN areas a ON p.area_actual_id = a.id WHERE DATE(p.created_at) = '$hoy' AND p.estado!='cancelado' AND p.metodo_pago='efectivo' ORDER BY p.created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
@@ -109,7 +122,7 @@ $canRevert = (in_array($role, ['Admin', 'SuperAdmin']) || !empty($userAuxD['devo
 
 // Cargar configuración WhatsApp para el modal
 try {
-    $stmtWa = $db->query("SELECT clave, valor FROM configuracion WHERE clave IN ('whatsapp_phone_sender_id','whatsapp_template_id','whatsapp_activo','onurix_api_id','onurix_api_key','sonido_habilitado','sonido_tema', 'sms_crear_enabled', 'sms_crear_checked_default', 'wa_crear_enabled', 'wa_crear_checked_default')");
+    $stmtWa = $db->query("SELECT clave, valor FROM configuracion WHERE clave IN ('whatsapp_phone_sender_id','whatsapp_template_id','whatsapp_activo','onurix_api_id','onurix_api_key','sonido_habilitado','sonido_tema', 'sms_crear_enabled', 'sms_crear_checked_default', 'wa_crear_enabled', 'wa_crear_checked_default', 'sms_finalizar_enabled', 'sms_finalizar_checked_default', 'wa_finalizar_enabled', 'wa_finalizar_checked_default')");
     $waCfg = $stmtWa->fetchAll(PDO::FETCH_KEY_PAIR);
 }
 catch (\Exception $e) {
@@ -124,6 +137,11 @@ $smsCrearEnabled = ($waCfg['sms_crear_enabled'] ?? '1') === '1';
 $smsCrearCheckedDefault = ($waCfg['sms_crear_checked_default'] ?? '1') === '1';
 $waCrearEnabled = ($waCfg['wa_crear_enabled'] ?? '1') === '1';
 $waCrearCheckedDefault = ($waCfg['wa_crear_checked_default'] ?? '1') === '1';
+
+$smsFinEnabled = ($waCfg['sms_finalizar_enabled'] ?? '1') === '1';
+$smsFinCheckedDefault = ($waCfg['sms_finalizar_checked_default'] ?? '1') === '1';
+$waFinEnabled = ($waCfg['wa_finalizar_enabled'] ?? '1') === '1';
+$waFinCheckedDefault = ($waCfg['wa_finalizar_checked_default'] ?? '1') === '1';
 
 $sonidoHabilitado = $waCfg['sonido_habilitado'] ?? '1';
 $sonidoTema = $waCfg['sonido_tema'] ?? 'cristal';
@@ -1070,6 +1088,45 @@ function getDeadlineClass($p)
             background: #ef4444;
         }
 
+        .badge.origen-pagina {
+            background: linear-gradient(135deg, #0891b2, #06b6d4);
+            color: #fff;
+            font-size: .72rem;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            box-shadow: 0 2px 6px rgba(8,145,178,.3);
+            animation: pulse-page 2.5s infinite;
+        }
+        @keyframes pulse-page {
+            0%, 100% { box-shadow: 0 2px 6px rgba(8,145,178,.3); }
+            50% { box-shadow: 0 2px 12px rgba(8,145,178,.6); }
+        }
+
+        .btn-aprobar {
+            background: linear-gradient(135deg, #0891b2, #0e7490);
+            color: white;
+            border: none;
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: .8rem;
+            font-weight: 700;
+            cursor: pointer;
+            width: 100%;
+            transition: transform .2s, box-shadow .2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+        .btn-aprobar:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(8,145,178,.4);
+        }
+
         .empty-state {
             text-align: center;
             color: #64748b;
@@ -1535,7 +1592,12 @@ else:
                                 <?= str_pad($p['id'], 4, '0', STR_PAD_LEFT)?> -
                                 <?= htmlspecialchars($p['cliente_nombre'])?>
                             </span>
-                            <?= getPriorityBadge($p)?>
+                            <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+                                <?php if (($p['origen'] ?? '') === 'pagina'): ?>
+                                <span class="badge origen-pagina">🌐 Página Web</span>
+                                <?php endif; ?>
+                                <?= getPriorityBadge($p)?>
+                            </div>
                         </div>
                         <div class="order-details">
                             <p><strong>Área:</strong>
@@ -1547,6 +1609,11 @@ else:
                             <p><strong>Fecha:</strong>
                                 <?= $p['created_at']?>
                             </p>
+                            <?php if (!empty($p['cliente_telefono'])): ?>
+                            <p><strong>📞 Teléfono:</strong>
+                                <?= htmlspecialchars($p['cliente_telefono'])?>
+                            </p>
+                            <?php endif; ?>
                             <?php if (!empty($p['creado_por'])): ?>
                             <p style="margin-top:4px;">
                                 <span
@@ -1555,16 +1622,29 @@ else:
                                     <?= htmlspecialchars($p['creado_por'])?>
                                 </span>
                             </p>
-                            <?php
-        endif; ?>
+                            <?php endif; ?>
+                            <?php if (($p['origen'] ?? '') === 'pagina' && empty($p['creado_por'])): ?>
+                            <p style="margin-top:4px;">
+                                <span
+                                    style="display:inline-block;background:#ecfeff;color:#0891b2;padding:2px 8px;border-radius:12px;font-size:0.75rem;font-weight:600;border:1px solid #a5f3fc;">
+                                    🌐 Pedido creado desde la página web
+                                </span>
+                            </p>
+                            <?php endif; ?>
                             <div style="margin-top: 10px;">
                                 <?= getPaymentInfo($p, $canViewPrices)?>
                             </div>
                         </div>
-                        <div class="order-actions">
+                        <div class="order-actions" style="display:flex; gap:6px; flex-wrap:wrap;">
+                            <?php if (($p['origen'] ?? '') === 'pagina'): ?>
+                            <button class="btn-aprobar"
+                                onclick="abrirModalAprobar(<?= htmlspecialchars(json_encode(sanitizePedido($p, $canViewPrices)))?>)">✅ Aprobar Pedido</button>
+                            <?php endif; ?>
                             <button class="btn-sm"
                                 onclick="verDetalles(<?= htmlspecialchars(json_encode(sanitizePedido($p, $canViewPrices)))?>)">👁️
                                 Visualizar</button>
+                            <button class="btn-sm" style="background:#10b981; color:white;"
+                                onclick="abrirModalFinalizar(<?= $p['id']?>)">✅ Finalizar</button>
                         </div>
                     </div>
                     <?php
@@ -1662,6 +1742,8 @@ else:
                             <button class="btn-sm"
                                 onclick="verDetalles(<?= htmlspecialchars(json_encode(sanitizePedido($p, $canViewPrices)))?>)">👁️
                                 Visualizar</button>
+                            <button class="btn-sm" style="background:#10b981; color:white;"
+                                onclick="abrirModalFinalizar(<?= $p['id']?>)">✅ Finalizar</button>
                         </div>
                     </div>
                     <?php
@@ -1798,29 +1880,37 @@ else:
                                 <?= getPaymentInfo($p, $canViewPrices)?>
                             </div>
                         </div>
-                        <div class="order-actions" style="flex-wrap: wrap; gap: 5px;">
+                        <div class="order-actions" style="display:flex; flex-wrap: nowrap; gap: 5px; margin-top: 10px;">
                             <?php if (!$entregado && in_array($role, ['Admin', 'SuperAdmin'])): ?>
+                            <!-- Devolver -->
                             <button class="btn-sm"
-                                style="background:#3b82f6; color:white; width: 100%; border:none; padding:8px; border-radius:6px; font-weight:600; cursor:pointer;"
-                                onclick="confirmarEntregar(<?= $p['id']?>)">📦 Entregar al Cliente</button>
-                            <?php
-        endif; ?>
+                                style="background:#6366f1; color:white; flex:1; border:none; padding:8px 4px; border-radius:6px; font-weight:600; cursor:pointer; font-size:0.75rem;"
+                                onclick="abrirEnviarAreaDesdeCard(<?= htmlspecialchars(json_encode(sanitizePedido($p, $canViewPrices)))?>)" title="Devolver">🔄 Devolver</button>
+                            
+                            <!-- Entregar -->
+                            <button class="btn-sm"
+                                style="background:#3b82f6; color:white; flex:1; border:none; padding:8px 4px; border-radius:6px; font-weight:600; cursor:pointer; font-size:0.75rem;"
+                                onclick="confirmarEntregar(<?= $p['id']?>)" title="Entregar">📦 Entregar</button>
+                            <?php endif; ?>
+
                             <?php if ($entregado && $canRevert): ?>
+                            <!-- Revertir (en lugar de Devolver/Entregar si ya está entregado) -->
                             <button class="btn-sm"
-                                style="background:#ef4444; color:white; width: 100%; border:none; padding:8px; border-radius:6px; font-weight:600; cursor:pointer;"
-                                onclick="confirmarRevertirEntrega(<?= $p['id']?>)">↩️ Revertir de Entregado</button>
-                            <?php
-        endif; ?>
+                                style="background:#ef4444; color:white; flex:1; border:none; padding:8px 4px; border-radius:6px; font-weight:600; cursor:pointer; font-size:0.75rem;"
+                                onclick="confirmarRevertirEntrega(<?= $p['id']?>)" title="Revertir">↩️ Revertir</button>
+                            <?php endif; ?>
+
                             <?php if (!$pagoCompleto && in_array($role, ['Admin', 'SuperAdmin'])): ?>
+                            <!-- Pagar -->
                             <button class="btn-sm"
-                                style="background:#22c55e; color:white; width: 100%; border:none; padding:8px; border-radius:6px; font-weight:600; cursor:pointer;"
-                                onclick="abrirModalPagoCompleto(<?= $p['id']?>)">💳 Pagar Completo</button>
-                            <?php
-        endif; ?>
+                                style="background:#22c55e; color:white; flex:1; border:none; padding:8px 4px; border-radius:6px; font-weight:600; cursor:pointer; font-size:0.75rem;"
+                                onclick="abrirModalPagoCompleto(<?= $p['id']?>)" title="Pagar">💳 Pagar</button>
+                            <?php endif; ?>
+
+                            <!-- Resumen -->
                             <button class="btn-sm"
-                                style="background:#e2e8f0; color:#475569; width: 100%; border:none; padding:8px; border-radius:6px; font-weight:600; cursor:pointer;"
-                                onclick="verDetalles(<?= htmlspecialchars(json_encode(sanitizePedido($p, $canViewPrices)))?>)">👁️
-                                Resumen</button>
+                                style="background:#e2e8f0; color:#475569; flex:1; border:none; padding:8px 4px; border-radius:6px; font-weight:600; cursor:pointer; font-size:0.75rem;"
+                                onclick="verDetalles(<?= htmlspecialchars(json_encode(sanitizePedido($p, $canViewPrices)))?>)" title="Resumen">👁️ Resumen</button>
                         </div>
                     </div>
                     <?php
@@ -1864,10 +1954,17 @@ endif; ?>
             <div style="font-size:3.5rem; margin-bottom:15px; animation: iconBounce 2s infinite; color:#22c55e;">💳
             </div>
             <h2 style="font-size:1.4rem; color:#1e293b; margin-bottom:10px;">¿Pagar Competo?</h2>
-            <p style="color:#64748b; font-size:0.95rem; line-height:1.5; margin-bottom:25px;">
+            <p style="color:#64748b; font-size:0.95rem; line-height:1.5; margin-bottom:20px;">
                 ¿Desea usted marcar como <strong style="color:#22c55e;">pago completo</strong> este pedido?
                 Automáticamente el abono será igual al total del pedido.
             </p>
+            <div style="margin-bottom: 25px; text-align: left;">
+                <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #475569; margin-bottom: 8px;">Método de Pago:</label>
+                <select id="pagoCompletoMetodo" class="form-control" style="width: 100%;">
+                    <option value="efectivo">Efectivo 💵</option>
+                    <option value="transferencia">Transferencia 🏦</option>
+                </select>
+            </div>
             <input type="hidden" id="pagoCompletoPedidoId">
             <div style="display:flex; gap:10px; justify-content:center;">
                 <button type="button" class="btn-modal"
@@ -1897,10 +1994,11 @@ endif; ?>
 
                 <div class="form-row">
                     <div class="form-col">
-                        <div class="form-group">
+                        <div class="form-group" style="position:relative;">
                             <label><i style="font-style:normal;">👤</i> Nombre Completo del Cliente</label>
                             <input type="text" id="cliente" class="form-control" required
-                                placeholder="Ingrese el nombre completo">
+                                placeholder="Escriba para buscar o agregar cliente..." autocomplete="off">
+                            <div id="clientSuggestions" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:50; background:#1e293b; border:1px solid rgba(255,255,255,0.15); border-radius:8px; max-height:200px; overflow-y:auto; box-shadow:0 8px 25px rgba(0,0,0,0.4);"></div>
                         </div>
                     </div>
                     <div class="form-col">
@@ -2339,7 +2437,51 @@ endforeach; ?>
                 registros para mostrar.</p>
         </div>
     </div>
+    <!-- Modal Finalizar Pedido -->
+    <div id="modalFinalizar" class="modal" onclick="if(event.target===this) this.style.display='none'">
+        <div class="modal-content" style="max-width:440px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                <h2 style="color:#10b981; margin:0;">✅ Finalizar Pedido</h2>
+                <span onclick="document.getElementById('modalFinalizar').style.display='none'" style="cursor:pointer; font-size:1.5rem;">&times;</span>
+            </div>
+            
+            <div style="text-align:center; margin-bottom:18px;">
+                <div style="font-size:2.8rem; margin-bottom:10px;">📦</div>
+                <p style="font-weight:600; font-size:1.02rem; margin-bottom:6px;">¿Confirmas la finalización del pedido?</p>
+                <p id="labelFinalizarPedido" style="color:#6366f1; font-weight:700;">#PED-0000</p>
+                <p style="color:#64748b; font-size:.86rem;">El pedido se marcará como terminado y pasará a la columna de Finalizados.</p>
+            </div>
 
+            <input type="hidden" id="finalizarPedidoId">
+
+            <?php if ($smsFinEnabled): ?>
+            <div style="background:#f0f7ff; border:1px solid #e0f2fe; border-radius:12px; padding:12px 15px; margin-bottom:10px;">
+                <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:.88rem;">
+                    <input type="checkbox" id="chkSendSmsFin" style="width:18px; height:18px;" <?= $smsFinCheckedDefault ? 'checked' : '' ?>>
+                    <span>Notificar al cliente por <strong>SMS</strong></span>
+                </label>
+            </div>
+            <?php else: ?>
+            <input type="hidden" id="chkSendSmsFin" value="0">
+            <?php endif; ?>
+
+            <?php if ($waActivo && $waFinEnabled): ?>
+            <div style="background:#f0fdf4; border:1px solid #dcfce7; border-radius:12px; padding:12px 15px; margin-bottom:15px;">
+                <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:.88rem;">
+                    <input type="checkbox" id="chkSendWaFin" style="width:18px; height:18px;" <?= ($waCredsOk && $waFinCheckedDefault) ? 'checked' : '' ?>>
+                    <span>Notificar por <strong style="color:#22c55e;">WhatsApp</strong></span>
+                </label>
+            </div>
+            <?php else: ?>
+            <input type="hidden" id="chkSendWaFin" value="0">
+            <?php endif; ?>
+
+            <div style="display:flex; gap:10px; justify-content:flex-end;">
+                <button class="btn btn-secondary" onclick="document.getElementById('modalFinalizar').style.display='none'">Cancelar</button>
+                <button class="btn" style="background:#10b981; color:white;" onclick="ejecutarFinalizacion()">Confirmar y Finalizar</button>
+            </div>
+        </div>
+    </div>
     <script>
         const basePath = window.location.pathname.replace(/\/recepcion\/?$/i, '');
 
@@ -2347,15 +2489,15 @@ endforeach; ?>
         const STAT_LISTS = <?= json_encode($statLists, JSON_UNESCAPED_UNICODE)?>;
         const canViewPrices = <?= $canViewPrices ? 'true' : 'false'?>;
 
-        function  openStatModal(tipo, titulo) {
+        function openStatModal(tipo, titulo) {
             var list = STAT_LISTS[tipo] || [];
             document.getElementById('statModalTitle').textContent = titulo + ' (' + list.length + ' registros)';
             document.getElementById('statModalSearch').value = '';
-            renderStatTable(list);
+            renderStatTable(list, tipo);
             document.getElementById('modalStatRecords').style.display = 'flex';
         }
 
-        function renderStatTable(list) {
+        function renderStatTable(list, tipo) {
             var tbody = document.getElementById('statModalBody');
             var empty = document.getElementById('statModalEmpty');
             tbody.innerHTML = '';
@@ -2366,6 +2508,10 @@ endforeach; ?>
             }
             empty.style.display = 'none';
             document.getElementById('statModalTable').style.display = 'table';
+
+            // Para recaudado: la columna "Abonado" debe mostrar lo cobrado hoy (cobrado_hoy)
+            var esRecaudado = tipo && (tipo.indexOf('recaudado') === 0);
+
             list.forEach(function (p) {
                 var padId = '#PED-' + String(p.id).padStart(4, '0');
                 var pagoClass = 'no-pago', pagoTxt = 'No Pago';
@@ -2373,7 +2519,12 @@ endforeach; ?>
                 else if (p.estado_pago === 'abono') { pagoClass = 'abono'; pagoTxt = 'Abono'; }
                 var fecha = (p.created_at || '').substring(0, 16);
                 var total = p.total > 0 ? '$' + Number(p.total).toLocaleString('es-CO') : '—';
-                var abonado = (p.abonado > 0) ? '$' + Number(p.abonado).toLocaleString('es-CO') : '$0';
+                // Si es recaudado, mostrar cobrado_hoy en lugar del acumulado
+                var abonadoVal = esRecaudado && p.cobrado_hoy != null
+                    ? Number(p.cobrado_hoy)
+                    : Number(p.abonado || 0);
+                var abonadoLabel = esRecaudado ? '💰 Cobrado hoy' : 'Abonado';
+                var abonado = '$' + abonadoVal.toLocaleString('es-CO');
                 var tr = document.createElement('tr');
                 tr.title = 'Ver detalles';
                 tr.style.cursor = 'pointer';
@@ -2384,7 +2535,7 @@ endforeach; ?>
                     + '<td>' + (p.fase_actual || '') + '</td>'
                     + '<td><span class="badge ' + pagoClass + '">' + pagoTxt + '</span></td>'
                     + '<td style="font-weight:600;color:#059669;">' + total + '</td>'
-                    + '<td style="color:#7c3aed;">' + abonado + '</td>'
+                    + '<td style="color:#7c3aed;font-weight:700;">' + abonado + '</td>'
                     + '<td style="white-space:nowrap;color:#94a3b8;">' + fecha + '</td>';
                 tbody.appendChild(tr);
             });
@@ -2857,6 +3008,40 @@ endforeach; ?>
             } catch (err) { alert('Error de red.'); }
         }
 
+        /* ===== FINALIZAR PEDIDO ===== */
+        function abrirModalFinalizar(id) {
+            document.getElementById('finalizarPedidoId').value = id;
+            document.getElementById('labelFinalizarPedido').textContent = '#PED-' + String(id).padStart(4, '0');
+            document.getElementById('modalFinalizar').style.display = 'flex';
+        }
+
+        async function ejecutarFinalizacion() {
+            var id = document.getElementById('finalizarPedidoId').value;
+            if (!id) return;
+
+            var csrfToken = document.getElementById('csrf_token').value;
+            var sendSms = document.getElementById('chkSendSmsFin').checked ? '1' : '0';
+            var sendWa = document.getElementById('chkSendWaFin').checked ? '1' : '0';
+
+            try {
+                var r = await fetch(basePath + '/api/kanban/finalizar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+                    body: JSON.stringify({ pedido_id: parseInt(id), send_sms: sendSms, send_whatsapp: sendWa, csrf_token: csrfToken })
+                });
+                var res = await r.json();
+                if (res.status === 'success') {
+                    document.getElementById('modalFinalizar').style.display = 'none';
+                    showToastRecep('Pedido finalizado con éxito.', 'success');
+                    setTimeout(function () { window.location.reload(); }, 1200);
+                } else {
+                    alert('Error: ' + res.message);
+                }
+            } catch (err) {
+                alert('Error de red al intentar finalizar el pedido.');
+            }
+        }
+
         /* ===== PAGAR COMPLETO ===== */
         function abrirModalPagoCompleto(id) {
             document.getElementById('pagoCompletoPedidoId').value = id;
@@ -2867,12 +3052,13 @@ endforeach; ?>
         async function ejecutarPagoCompleto() {
             var id = document.getElementById('pagoCompletoPedidoId').value;
             if (!id) return;
+            var metodo = document.getElementById('pagoCompletoMetodo').value;
             var csrfToken = document.getElementById('csrf_token').value;
             try {
                 var r = await fetch(basePath + '/api/pedidos/pagado-completo', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
-                    body: JSON.stringify({ pedido_id: id, csrf_token: csrfToken })
+                    body: JSON.stringify({ pedido_id: id, metodo_pago: metodo, csrf_token: csrfToken })
                 });
                 var res = await r.json();
                 if (res.status === 'success') {
@@ -2885,6 +3071,11 @@ endforeach; ?>
 
         /* ===== ENVIAR A AREA ===== */
         var _areaDestinoSeleccionada = null;
+
+        function abrirEnviarAreaDesdeCard(p) {
+            _currentPedido = p;
+            abrirEnviarArea();
+        }
 
         function abrirEnviarArea() {
             if (!_currentPedido) return;
@@ -2992,6 +3183,8 @@ endforeach; ?>
                     if(res.data.nuevo_estado) {
                         document.getElementById('editEstadoPago').value = res.data.nuevo_estado;
                     }
+                    // Actualizar indicadores en tiempo real recargando suavemente
+                    setTimeout(function () { window.location.reload(); }, 1000);
                 } else {
                     alert('Error: ' + res.message);
                 }
@@ -3313,10 +3506,407 @@ endforeach; ?>
         }
     </script>
 
+    <!-- ====== MODAL APROBAR PEDIDO DE PÁGINA WEB ====== -->
+    <div id="modalAprobar" class="modal">
+        <div class="modal-content" style="max-width:680px;">
+            <h2 style="display:flex; justify-content:space-between; align-items:center;">
+                ✅ Aprobar Pedido de Página Web
+                <span onclick="document.getElementById('modalAprobar').style.display='none'"
+                    style="cursor:pointer; font-size:1.5rem;">&times;</span>
+            </h2>
+            <div id="aprobarInfo" style="background:#ecfeff; border:1px solid #a5f3fc; border-radius:10px; padding:14px 18px; margin-bottom:20px;">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                    <span class="badge origen-pagina" style="animation:none;">🌐 Página Web</span>
+                    <strong id="aprobarPedId" style="color:#0e7490;"></strong>
+                </div>
+                <p style="color:#334155; font-size:.88rem;"><strong>Cliente:</strong> <span id="aprobarCliente"></span></p>
+                <p style="color:#334155; font-size:.88rem;"><strong>Teléfono:</strong> <span id="aprobarTel"></span></p>
+                <p style="color:#334155; font-size:.88rem;"><strong>Descripción:</strong> <span id="aprobarDesc" style="color:#64748b;"></span></p>
+            </div>
+
+            <input type="hidden" id="aprobar_pedido_id" value="">
+            <input type="hidden" id="aprobar_estado_pago" value="no_pago">
+            <input type="hidden" id="aprobar_total_pago" value="0">
+            <input type="hidden" id="aprobar_abono_pago" value="0">
+            <input type="hidden" id="aprobar_prioridad" value="normal">
+
+            <div class="form-group">
+                <label><i style="font-style:normal;">💵</i> Estado de Pago</label>
+                <div class="selection-grid" id="gridPagosAprobar">
+                    <div class="selection-card sc-pago-completo" onclick="selectPagoAprobar('pago_completo', this)">
+                        <div class="icon-circle">✓</div>
+                        <div class="card-title">Pago Completo</div>
+                    </div>
+                    <div class="selection-card sc-abono" onclick="selectPagoAprobar('abono', this)">
+                        <div class="icon-circle">$</div>
+                        <div class="card-title">Abono</div>
+                    </div>
+                    <div class="selection-card sc-no-pago active" onclick="selectPagoAprobar('no_pago', this)">
+                        <div class="icon-circle">✕</div>
+                        <div class="card-title">No Pago</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Submodal inline for payment details -->
+            <div id="aprobarPaymentDetail" style="display:none; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:16px; margin-bottom:16px;">
+                <div class="form-group" style="margin-bottom:12px;">
+                    <label>Valor Total del Pedido ($)</label>
+                    <input type="number" id="aprobar_inputTotal" class="form-control" placeholder="Ej. 150000" onchange="document.getElementById('aprobar_total_pago').value=this.value">
+                </div>
+                <div class="form-group" id="grpAbonoAprobar" style="display:none; margin-bottom:12px;">
+                    <label>Valor Abonado ($)</label>
+                    <input type="number" id="aprobar_inputAbono" class="form-control" placeholder="Ej. 50000" onchange="document.getElementById('aprobar_abono_pago').value=this.value">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label>💳 Método de Pago</label>
+                    <select id="aprobar_metodoPago" class="form-control">
+                        <option value="efectivo">Efectivo 💵</option>
+                        <option value="transferencia">Transferencia 🏦</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label><i style="font-style:normal;">🕒</i> Prioridad del Pedido</label>
+                <div class="selection-grid" id="gridPrioridadAprobar">
+                    <div class="selection-card sc-prioridad" onclick="selectPrioridadAprobar('prioridad', this)">
+                        <div class="icon-circle">⚠️</div>
+                        <div class="card-title">Urgente</div>
+                        <div class="card-subtitle">(1 día)</div>
+                    </div>
+                    <div class="selection-card sc-normal active" onclick="selectPrioridadAprobar('normal', this)">
+                        <div class="icon-circle">🕒</div>
+                        <div class="card-title">Normal</div>
+                        <div class="card-subtitle">(2 días)</div>
+                    </div>
+                    <div class="selection-card sc-largo" onclick="selectPrioridadAprobar('largo', this)">
+                        <div class="icon-circle">📅</div>
+                        <div class="card-title">Largo</div>
+                        <div class="card-subtitle">(3 días o más)</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label><i style="font-style:normal;">📅</i> Fecha de Entrega (opcional)</label>
+                <input type="date" id="aprobar_fecha_entrega" class="form-control">
+            </div>
+
+            <div class="form-group">
+                <label><i style="font-style:normal;">📝</i> Notas / Descripción del Pedido</label>
+                <textarea id="aprobar_nota" class="form-control" rows="4" placeholder="Edite las notas del pedido..."></textarea>
+            </div>
+
+            <div class="form-group">
+                <label><i style="font-style:normal;">📎</i> Archivos Adjuntos</label>
+                <div class="file-upload-box" id="aprobarDropZone" onclick="document.getElementById('aprobarFileInput').click()" style="cursor:pointer;">
+                    <input type="file" id="aprobarFileInput" name="archivos[]" multiple style="display:none;"
+                        onchange="handleAprobarFiles(this.files)">
+                    <i style="font-style:normal;">☁️</i>
+                    <p>Arrastra archivos aquí o haz clic para seleccionar</p>
+                </div>
+                <div id="aprobarFileList" style="margin-top: 10px; display: flex; flex-direction: column; gap: 5px;"></div>
+            </div>
+
+            <?php if ($smsCrearEnabled): ?>
+            <div class="sms-check">
+                <input type="checkbox" id="aprobar_send_sms" <?= $smsCrearCheckedDefault ? 'checked' : ''?>>
+                <label for="aprobar_send_sms">Enviar notificación via SMS al cliente</label>
+            </div>
+            <?php endif; ?>
+
+            <?php if ($waActivo && $waCrearEnabled): ?>
+            <div class="wa-section">
+                <div class="wa-check">
+                    <input type="checkbox" id="aprobar_send_whatsapp" <?= $waCrearCheckedDefault ? 'checked' : ''?>>
+                    <label for="aprobar_send_whatsapp">
+                        Enviar SMS vía WhatsApp al cliente
+                        <span class="wa-badge">&#128153; WhatsApp</span>
+                    </label>
+                </div>
+            </div>
+            <?php endif; ?>
+
+            <div style="display: flex; gap: 15px; margin-top: 20px;">
+                <button type="button" class="btn"
+                    style="background:#f1f5f9; color:#475569; border:1px solid #e2e8f0; flex:1; justify-content:center;"
+                    onclick="document.getElementById('modalAprobar').style.display='none'">Cancelar</button>
+                <button type="button" class="btn" id="btnAprobar"
+                    style="background:linear-gradient(135deg, #0891b2, #0e7490); flex:2; justify-content:center; font-size:1rem;"
+                    onclick="enviarAprobacion()">
+                    ✅ APROBAR PEDIDO
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /* ========= APROBAR PEDIDO DE PÁGINA WEB ========= */
+        var _aprobarPedido = null;
+        var _aprobarArchivos = [];
+
+        // --- Drag & Drop para modal Aprobar ---
+        (function(){
+            var dz = document.getElementById('aprobarDropZone');
+            if (!dz) return;
+            dz.addEventListener('dragover', function(e) {
+                e.preventDefault();
+                dz.style.borderColor = '#0891b2';
+                dz.style.background = '#ecfeff';
+            });
+            dz.addEventListener('dragleave', function(e) {
+                e.preventDefault();
+                dz.style.borderColor = '#cbd5e1';
+                dz.style.background = '#f8fafc';
+            });
+            dz.addEventListener('drop', function(e) {
+                e.preventDefault();
+                dz.style.borderColor = '#cbd5e1';
+                dz.style.background = '#f8fafc';
+                handleAprobarFiles(e.dataTransfer.files);
+            });
+        })();
+
+        function handleAprobarFiles(files) {
+            for (var i = 0; i < files.length; i++) {
+                _aprobarArchivos.push(files[i]);
+            }
+            renderAprobarFileList();
+        }
+
+        function renderAprobarFileList() {
+            var list = document.getElementById('aprobarFileList');
+            list.innerHTML = '';
+            _aprobarArchivos.forEach(function(file, index) {
+                var item = document.createElement('div');
+                item.style.cssText = 'display:flex; justify-content:space-between; align-items:center; background:#f1f5f9; padding:8px 12px; border-radius:8px; font-size:0.85rem; border:1px solid #e2e8f0;';
+                item.innerHTML = '<span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:85%; color:#334155;">📎 ' + file.name + '</span>' +
+                    '<button type="button" onclick="removeAprobarFile(' + index + ')" style="background:none; border:none; color:#ef4444; cursor:pointer; font-weight:bold; font-size:1.1rem; line-height:1;">&times;</button>';
+                list.appendChild(item);
+            });
+        }
+
+        function removeAprobarFile(index) {
+            _aprobarArchivos.splice(index, 1);
+            renderAprobarFileList();
+            document.getElementById('aprobarFileInput').value = '';
+        }
+
+        function abrirModalAprobar(p) {
+            _aprobarPedido = p;
+            _aprobarArchivos = [];
+            document.getElementById('aprobar_pedido_id').value = p.id;
+            document.getElementById('aprobarPedId').textContent = '#PED-' + String(p.id).padStart(4, '0');
+            document.getElementById('aprobarCliente').textContent = p.cliente_nombre || '-';
+            document.getElementById('aprobarTel').textContent = p.cliente_telefono || '-';
+            document.getElementById('aprobarDesc').textContent = p.descripcion || 'Sin descripción';
+
+            // Reset form
+            document.getElementById('aprobar_estado_pago').value = 'no_pago';
+            document.getElementById('aprobar_prioridad').value = 'normal';
+            document.getElementById('aprobar_total_pago').value = '0';
+            document.getElementById('aprobar_abono_pago').value = '0';
+            document.getElementById('aprobar_inputTotal').value = '';
+            document.getElementById('aprobar_inputAbono').value = '';
+            document.getElementById('aprobar_fecha_entrega').value = '';
+            // Pre-fill notes with existing description for editing
+            document.getElementById('aprobar_nota').value = p.descripcion || '';
+            document.getElementById('aprobarPaymentDetail').style.display = 'none';
+            document.getElementById('grpAbonoAprobar').style.display = 'none';
+            // Reset file list
+            document.getElementById('aprobarFileList').innerHTML = '';
+            document.getElementById('aprobarFileInput').value = '';
+
+            // Reset selection cards
+            document.querySelectorAll('#gridPagosAprobar .selection-card').forEach(c => c.classList.remove('active'));
+            document.querySelector('#gridPagosAprobar .sc-no-pago').classList.add('active');
+            document.querySelectorAll('#gridPrioridadAprobar .selection-card').forEach(c => c.classList.remove('active'));
+            document.querySelector('#gridPrioridadAprobar .sc-normal').classList.add('active');
+
+            // Enable button
+            document.getElementById('btnAprobar').disabled = false;
+            document.getElementById('btnAprobar').innerHTML = '✅ APROBAR PEDIDO';
+
+            document.getElementById('modalAprobar').style.display = 'flex';
+        }
+
+        function selectPagoAprobar(val, el) {
+            document.querySelectorAll('#gridPagosAprobar .selection-card').forEach(c => c.classList.remove('active'));
+            el.classList.add('active');
+            document.getElementById('aprobar_estado_pago').value = val;
+
+            if (val === 'no_pago') {
+                document.getElementById('aprobarPaymentDetail').style.display = 'none';
+            } else {
+                document.getElementById('aprobarPaymentDetail').style.display = 'block';
+                document.getElementById('grpAbonoAprobar').style.display = val === 'abono' ? 'block' : 'none';
+            }
+        }
+
+        function selectPrioridadAprobar(val, el) {
+            document.querySelectorAll('#gridPrioridadAprobar .selection-card').forEach(c => c.classList.remove('active'));
+            el.classList.add('active');
+            document.getElementById('aprobar_prioridad').value = val;
+        }
+
+        async function enviarAprobacion() {
+            var btn = document.getElementById('btnAprobar');
+            var pedidoId = document.getElementById('aprobar_pedido_id').value;
+            var estadoPago = document.getElementById('aprobar_estado_pago').value;
+            var total = parseFloat(document.getElementById('aprobar_inputTotal').value) || 0;
+            var abonado = parseFloat(document.getElementById('aprobar_inputAbono').value) || 0;
+            var prioridad = document.getElementById('aprobar_prioridad').value;
+            var metodoPago = document.getElementById('aprobar_metodoPago').value;
+            var fechaEntrega = document.getElementById('aprobar_fecha_entrega').value;
+            var descripcion = document.getElementById('aprobar_nota').value.trim();
+
+            // Validate total for paid states
+            if (estadoPago !== 'no_pago' && total <= 0) {
+                alert('Debe ingresar el valor total del pedido.');
+                return;
+            }
+            if (estadoPago === 'abono' && abonado <= 0) {
+                alert('Debe ingresar el monto a abonar.');
+                return;
+            }
+
+            var smsEl = document.getElementById('aprobar_send_sms');
+            var waEl = document.getElementById('aprobar_send_whatsapp');
+
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Aprobando...';
+
+            var csrfToken = document.getElementById('csrf_token').value;
+
+            // Use FormData to support file uploads
+            var formData = new FormData();
+            formData.append('csrf_token', csrfToken);
+            formData.append('pedido_id', pedidoId);
+            formData.append('estado_pago', estadoPago);
+            formData.append('prioridad', prioridad);
+            formData.append('total', total);
+            formData.append('abonado', abonado);
+            formData.append('metodo_pago', metodoPago);
+            formData.append('fecha_entrega_esperada', fechaEntrega);
+            formData.append('descripcion', descripcion);
+            formData.append('send_sms', smsEl && smsEl.checked ? '1' : '0');
+            formData.append('send_whatsapp', waEl && waEl.checked ? '1' : '0');
+
+            // Append files
+            _aprobarArchivos.forEach(function(file) {
+                formData.append('archivos[]', file);
+            });
+
+            try {
+                var r = await fetch(basePath + '/api/pedidos/aprobar-pagina', {
+                    method: 'POST',
+                    headers: { 'X-CSRF-TOKEN': csrfToken },
+                    body: formData
+                });
+                var res = await r.json();
+                if (res.status === 'success') {
+                    document.getElementById('modalAprobar').style.display = 'none';
+                    if (window.BannerSounds) BannerSounds.crear();
+                    showToastRecep('✅ Pedido aprobado exitosamente. Notificaciones enviadas.', 'success');
+                    setTimeout(function () { window.location.reload(); }, 1500);
+                } else {
+                    alert('Error: ' + (res.message || 'No se pudo aprobar.'));
+                    btn.disabled = false;
+                    btn.innerHTML = '✅ APROBAR PEDIDO';
+                }
+            } catch (e) {
+                alert('Error de red: ' + e.message);
+                btn.disabled = false;
+                btn.innerHTML = '✅ APROBAR PEDIDO';
+            }
+        }
+    </script>
+
 </body>
 <script>
     window.BUND_CFG = { enabled: <?= $sonidoHabilitado === '1' ? 'true' : 'false'?>, theme: '<?= htmlspecialchars($sonidoTema)?>' };
 </script>
 <script src="<?= $basePath?>/js/sounds.js"></script>
+
+<script>
+// ── Cliente Autocomplete ──
+(function() {
+    let cachedClients = null;
+    const clientInput = document.getElementById('cliente');
+    const suggestionsBox = document.getElementById('clientSuggestions');
+    if (!clientInput || !suggestionsBox) return;
+
+    async function loadClients() {
+        if (cachedClients) return cachedClients;
+        try {
+            const basePath = '<?= $basePath ?>';
+            const res = await fetch(basePath + '/public/api/clientes/list');
+            const text = await res.text();
+            if (text.trim().startsWith('<')) return [];
+            const json = JSON.parse(text);
+            if (json.status === 'success') {
+                cachedClients = json.data;
+                return cachedClients;
+            }
+        } catch(e) {
+            console.error('Error loading clients', e);
+        }
+        return [];
+    }
+
+    clientInput.addEventListener('focus', () => loadClients());
+
+    clientInput.addEventListener('input', async function() {
+        const term = this.value.toLowerCase().trim();
+        if (term.length < 1) {
+            suggestionsBox.style.display = 'none';
+            return;
+        }
+
+        const clients = await loadClients();
+        const matches = clients.filter(c =>
+            (c.nombre && c.nombre.toLowerCase().includes(term)) ||
+            (c.telefono && c.telefono.includes(term))
+        ).slice(0, 8);
+
+        if (matches.length === 0) {
+            suggestionsBox.style.display = 'none';
+            return;
+        }
+
+        suggestionsBox.innerHTML = matches.map(c => `
+            <div class="client-suggestion" data-name="${c.nombre}" data-phone="${c.telefono || ''}"
+                 style="padding:10px 14px; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.06); display:flex; justify-content:space-between; align-items:center; transition:background 0.15s;">
+                <div>
+                    <div style="font-weight:600; color:#f1f5f9; font-size:0.9rem;">${c.nombre}</div>
+                    <div style="font-size:0.78rem; color:#94a3b8;">${c.compras} compras</div>
+                </div>
+                <div style="font-size:0.82rem; color:#818cf8;">${c.telefono || ''}</div>
+            </div>
+        `).join('');
+
+        suggestionsBox.querySelectorAll('.client-suggestion').forEach(el => {
+            el.addEventListener('mouseenter', () => el.style.background = 'rgba(99,102,241,0.12)');
+            el.addEventListener('mouseleave', () => el.style.background = 'transparent');
+            el.addEventListener('mousedown', function(e) {
+                e.preventDefault();
+                clientInput.value = this.dataset.name;
+                const phoneInput = document.getElementById('telefono');
+                if (phoneInput && this.dataset.phone) {
+                    phoneInput.value = this.dataset.phone;
+                }
+                suggestionsBox.style.display = 'none';
+            });
+        });
+
+        suggestionsBox.style.display = 'block';
+    });
+
+    clientInput.addEventListener('blur', () => {
+        setTimeout(() => { suggestionsBox.style.display = 'none'; }, 200);
+    });
+})();
+</script>
 
 </html>

@@ -657,6 +657,162 @@ $statLists = [
         .toast.error {
             border-left-color: #ef4444;
         }
+
+        /* ── Botón Crear Pedido ── */
+        .btn-crear-pedido {
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            padding: 9px 18px;
+            font-size: .84rem;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            transition: transform .2s, box-shadow .2s;
+            box-shadow: 0 4px 15px rgba(99, 102, 241, .35);
+        }
+        .btn-crear-pedido:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 22px rgba(99, 102, 241, .5);
+        }
+        .btn-crear-pedido:active {
+            transform: scale(.97);
+        }
+
+        /* ── Modal Crear Pedido ── */
+        .service-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px;
+            padding: 20px 24px;
+        }
+        @media(max-width:600px) { .service-grid { grid-template-columns: repeat(2, 1fr); } }
+
+        .service-card {
+            position: relative;
+            border-radius: 14px;
+            overflow: hidden;
+            cursor: pointer;
+            border: 2px solid rgba(255,255,255,.08);
+            transition: all .25s;
+            aspect-ratio: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-end;
+        }
+        .service-card img {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform .3s;
+        }
+        .service-card:hover img {
+            transform: scale(1.08);
+        }
+        .service-card::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(0deg, rgba(0,0,0,.75) 0%, rgba(0,0,0,.1) 60%, transparent 100%);
+            z-index: 1;
+        }
+        .service-card .svc-label {
+            position: relative;
+            z-index: 2;
+            color: #fff;
+            font-size: .88rem;
+            font-weight: 700;
+            padding: 12px;
+            text-align: center;
+            text-shadow: 0 2px 8px rgba(0,0,0,.6);
+        }
+        .service-card.selected {
+            border-color: #6366f1;
+            box-shadow: 0 0 0 3px rgba(99,102,241,.4), 0 8px 24px rgba(99,102,241,.25);
+        }
+        .service-card.selected::before {
+            content: '✓';
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            z-index: 3;
+            background: #6366f1;
+            color: #fff;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: .9rem;
+            font-weight: 800;
+        }
+
+        .crear-form { padding: 0 24px 24px; }
+        .crear-form label {
+            display: block;
+            font-size: .78rem;
+            font-weight: 600;
+            color: var(--muted);
+            margin-bottom: 5px;
+            margin-top: 14px;
+            text-transform: uppercase;
+            letter-spacing: .03em;
+        }
+        .crear-form input, .crear-form textarea {
+            width: 100%;
+            background: rgba(0,0,0,.2);
+            border: 1px solid rgba(255,255,255,.1);
+            border-radius: 10px;
+            padding: 11px 14px;
+            color: #f1f5f9;
+            font-size: .9rem;
+            font-family: inherit;
+            outline: none;
+            transition: border-color .2s;
+        }
+        .crear-form input:focus, .crear-form textarea:focus {
+            border-color: #6366f1;
+        }
+        .crear-form textarea { resize: vertical; min-height: 70px; }
+        .crear-form .required-star { color: #f43f5e; }
+
+        .crear-form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+        @media(max-width:500px) { .crear-form-row { grid-template-columns: 1fr; } }
+
+        .btn-submit-pedido {
+            width: 100%;
+            margin-top: 20px;
+            padding: 14px;
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: #fff;
+            border: none;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform .2s, box-shadow .2s;
+            box-shadow: 0 4px 15px rgba(99,102,241,.3);
+        }
+        .btn-submit-pedido:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 22px rgba(99,102,241,.45);
+        }
+        .btn-submit-pedido:disabled {
+            opacity: .5;
+            cursor: not-allowed;
+            transform: none;
+        }
     </style>
 </head>
 
@@ -812,6 +968,56 @@ endfor; ?>
 
     <!-- Toast -->
     <div class="toast" id="toastEl"><span id="toastMsg">OK</span></div>
+
+    <!-- ====== MODAL CREAR PEDIDO RÁPIDO ====== -->
+    <div class="modal-overlay" id="modalCrear" onclick="if(event.target===this) cerrarModalCrear()">
+        <div class="modal-box" style="max-width:600px;">
+            <div class="modal-head">
+                <span class="modal-head-icon">📝</span>
+                <div class="modal-head-info">
+                    <h2>Crear Pedido Rápido</h2>
+                    <p>Selecciona un servicio y llena los datos básicos</p>
+                </div>
+                <button class="modal-close" onclick="cerrarModalCrear()">×</button>
+            </div>
+
+            <!-- Servicio selector -->
+            <div class="service-grid" id="serviceGrid">
+                <div class="service-card" data-servicio="DTF" onclick="seleccionarServicio(this)">
+                    <img src="<?= $basePath ?>/img/servicios/dtf.png" alt="DTF" loading="lazy">
+                    <div class="svc-label">DTF</div>
+                </div>
+                <div class="service-card" data-servicio="Impresión" onclick="seleccionarServicio(this)">
+                    <img src="<?= $basePath ?>/img/servicios/impresion.png" alt="Impresión" loading="lazy">
+                    <div class="svc-label">Impresión</div>
+                </div>
+                <div class="service-card" data-servicio="Láser" onclick="seleccionarServicio(this)">
+                    <img src="<?= $basePath ?>/img/servicios/laser.png" alt="Láser" loading="lazy">
+                    <div class="svc-label">Láser</div>
+                </div>
+                <div class="service-card" data-servicio="Camiseta" onclick="seleccionarServicio(this)">
+                    <img src="<?= $basePath ?>/img/servicios/camiseta.png" alt="Camiseta" loading="lazy">
+                    <div class="svc-label">Camiseta</div>
+                </div>
+            </div>
+
+            <div class="crear-form" id="crearForm">
+                <div class="crear-form-row">
+                    <div>
+                        <label>Nombre del Cliente <span class="required-star">*</span></label>
+                        <input type="text" id="cpNombre" placeholder="Ej: Juan Pérez" required>
+                    </div>
+                    <div>
+                        <label>Número Celular <span class="required-star">*</span></label>
+                        <input type="tel" id="cpTelefono" placeholder="Ej: 300 123 4567" required>
+                    </div>
+                </div>
+                <label>Descripción / Notas <span class="required-star">*</span></label>
+                <textarea id="cpNotas" placeholder="Describe el trabajo: medidas, colores, cantidad, etc."></textarea>
+                <button class="btn-submit-pedido" id="btnSubmitPedido" onclick="enviarPedidoRapido()">🚀 Crear Pedido</button>
+            </div>
+        </div>
+    </div>
 
     <script>
         const basePath = window.location.pathname.replace(/\/dashboard\/?$/i, '');
@@ -1092,6 +1298,78 @@ endfor; ?>
                     body: JSON.stringify({ csrf_token: csrf })
                 }).catch(e => { }); // Silent fail
             }, 3000); // 3 segundos después de cargar la página inicial
+        }
+        /* ========= CREAR PEDIDO RÁPIDO ========= */
+        var _servicioSeleccionado = '';
+
+        function abrirModalCrear() {
+            // Limpiar estado previo
+            _servicioSeleccionado = '';
+            document.querySelectorAll('.service-card').forEach(c => c.classList.remove('selected'));
+            document.getElementById('cpNombre').value = '';
+            document.getElementById('cpTelefono').value = '';
+            document.getElementById('cpNotas').value = '';
+            document.getElementById('btnSubmitPedido').disabled = false;
+            document.getElementById('btnSubmitPedido').textContent = '🚀 Crear Pedido';
+            document.getElementById('modalCrear').classList.add('open');
+        }
+
+        function cerrarModalCrear() {
+            document.getElementById('modalCrear').classList.remove('open');
+        }
+
+        function seleccionarServicio(el) {
+            document.querySelectorAll('.service-card').forEach(c => c.classList.remove('selected'));
+            el.classList.add('selected');
+            _servicioSeleccionado = el.dataset.servicio;
+        }
+
+        async function enviarPedidoRapido() {
+            var nombre = document.getElementById('cpNombre').value.trim();
+            var telefono = document.getElementById('cpTelefono').value.trim();
+            var notas = document.getElementById('cpNotas').value.trim();
+            var btn = document.getElementById('btnSubmitPedido');
+
+            if (!nombre) { showToast('El nombre del cliente es obligatorio.', 'error'); return; }
+            if (!telefono) { showToast('El número de celular es obligatorio.', 'error'); return; }
+            if (!_servicioSeleccionado) { showToast('Selecciona un tipo de servicio.', 'error'); return; }
+
+            var descripcion = '[' + _servicioSeleccionado + '] ' + (notas || 'Sin notas adicionales');
+            var csrf = document.querySelector('meta[name="csrf-token"]').content;
+
+            btn.disabled = true;
+            btn.textContent = '⏳ Creando...';
+
+            try {
+                var r = await fetch(basePath + '/api/pedidos/crear', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        csrf_token: csrf,
+                        cliente_nombre: nombre,
+                        cliente_telefono: telefono,
+                        descripcion: descripcion,
+                        estado_pago: 'no_pago',
+                        prioridad: 'normal',
+                        total: 0,
+                        abonado: 0,
+                        metodo_pago: 'efectivo'
+                    })
+                });
+                var res = await r.json();
+                if (res.status === 'success') {
+                    var pedId = res.data ? '#PED-' + String(res.data.pedido_id).padStart(4, '0') : '';
+                    showToast('✅ Pedido ' + pedId + ' creado exitosamente.', 'success');
+                    cerrarModalCrear();
+                    cargarMetricas();
+                } else {
+                    throw new Error(res.message || 'Error desconocido');
+                }
+            } catch (e) {
+                showToast('Error: ' + e.message, 'error');
+                btn.disabled = false;
+                btn.textContent = '🚀 Crear Pedido';
+            }
         }
     </script>
 </body>

@@ -65,6 +65,50 @@ class ApiRoutes
             exit;
         }
 
+        // Obtener pedidos de un cliente
+        if ($method === 'GET' && $uriParsed === '/api/clientes/pedidos') {
+            (new AuthMiddleware())->authorizeRoles(['Admin', 'SuperAdmin', 'Gerente']);
+            require_once dirname(__DIR__) . '/app/controllers/ClienteController.php';
+            (new \App\Controllers\ClienteController())->getOrdersByClient();
+            exit;
+        }
+
+        // Vista Clientes (solo Admin y SuperAdmin)
+        if ($method === 'GET' && $uriParsed === '/clientes') {
+            (new AuthMiddleware())->authorizeView(['Admin', 'SuperAdmin'], $basePath);
+            require_once dirname(__DIR__) . '/app/controllers/ClienteController.php';
+            (new \App\Controllers\ClienteController())->indexView();
+            exit;
+        }
+
+        // Vista Clientes Prospectos (Kanban frecuentes)
+        if ($method === 'GET' && $uriParsed === '/clientes-prospectos') {
+            (new AuthMiddleware())->authorizeView(['Admin', 'SuperAdmin', 'Gerente'], $basePath);
+            require_once dirname(__DIR__) . '/views/clientes_prospectos.php';
+            exit;
+        }
+
+        // Vista Clientes Potenciales (Kanban por monto de pedido)
+        if ($method === 'GET' && $uriParsed === '/clientes-potenciales') {
+            (new AuthMiddleware())->authorizeView(['Admin', 'SuperAdmin', 'Gerente'], $basePath);
+            require_once dirname(__DIR__) . '/views/clientes_potenciales.php';
+            exit;
+        }
+
+        // Vista Flujo de Trabajo
+        if ($method === 'GET' && $uriParsed === '/flujo-trabajo') {
+            (new AuthMiddleware())->authorizeView(['Admin', 'SuperAdmin', 'Gerente'], $basePath);
+            require_once dirname(__DIR__) . '/views/flujo_trabajo.php';
+            exit;
+        }
+
+        // Vista Base de Datos Pedidos
+        if ($method === 'GET' && $uriParsed === '/base-datos-pedidos') {
+            (new AuthMiddleware())->authorizeView(['Admin', 'SuperAdmin', 'Gerente'], $basePath);
+            require_once dirname(__DIR__) . '/views/base_datos_pedidos.php';
+            exit;
+        }
+
         // Vista Reporte de Movimientos (solo Admin)
         if ($method === 'GET' && $uriParsed === '/reporte-movimientos') {
             (new AuthMiddleware())->authorizeView(['Admin', 'SuperAdmin'], $basePath);
@@ -76,6 +120,13 @@ class ApiRoutes
         if ($method === 'GET' && $uriParsed === '/reportes-pedidos') {
             (new AuthMiddleware())->authorizeView(['Admin', 'Gerente'], $basePath);
             require_once dirname(__DIR__) . '/views/reportes_pedidos.php';
+            exit;
+        }
+
+        // Vista WhatsApp
+        if ($method === 'GET' && $uriParsed === '/whatsapp') {
+            (new AuthMiddleware())->handle();
+            require_once dirname(__DIR__) . '/views/whatsapp.php';
             exit;
         }
 
@@ -112,6 +163,12 @@ class ApiRoutes
             file_put_contents(dirname(__DIR__) . '/debug_post.txt', print_r($_POST, true) . "\n\nFILES: " . print_r($_FILES, true) . "\n\nINPUT: " . file_get_contents('php://input'));
             echo json_encode(["status" => "success", "post" => $_POST, "files" => $_FILES, "input" => file_get_contents('php://input')]);
             exit;
+        }
+
+        // Webhook Onurix (Acceso Público, ellos mismos validan vía Salt o IPs)
+        if ($method === 'POST' && $uriParsed === '/webhook/onurix') {
+            require_once dirname(__DIR__) . '/app/controllers/WebhookController.php';
+            (new \App\Controllers\WebhookController())->handleOnurix();
         }
 
         switch ($method) {
@@ -156,6 +213,14 @@ class ApiRoutes
                     (new AuthMiddleware())->authorizeRoles(['Admin', 'SuperAdmin']);
                     (new \App\Middlewares\CsrfMiddleware())->handle();
                     (new \App\Controllers\UsuarioController())->updateAreas();
+                }
+                
+                // --- WHATSAPP (Configuración de Webhooks y Modos) ---
+                else if ($uriParsed === '/api/whatsapp/config') {
+                    (new AuthMiddleware())->authorizeRoles(['Admin', 'SuperAdmin']);
+                    (new \App\Middlewares\CsrfMiddleware())->handle();
+                    require_once dirname(__DIR__) . '/app/controllers/WhatsappController.php';
+                    (new \App\Controllers\WhatsappController())->saveConfig();
                 }
                 else if ($uriParsed === '/api/usuarios/editar-admin') {
                     (new AuthMiddleware())->authorizeRoles(['Admin', 'SuperAdmin']);
@@ -203,10 +268,19 @@ class ApiRoutes
                 }
 
                 // --- GESTIÓN DE PEDIDOS ---
+                // Ruta pública para crear pedidos desde la landing page (sin auth/csrf)
+                else if ($uri === '/api/pedidos/crear-publico') {
+                    (new \App\Controllers\RecepcionController())->store();
+                }
                 else if ($uri === '/api/pedidos/crear') {
                     (new AuthMiddleware())->handle();
                     (new \App\Middlewares\CsrfMiddleware())->handle();
                     (new \App\Controllers\RecepcionController())->store();
+                }
+                else if ($uri === '/api/pedidos/aprobar-pagina') {
+                    (new AuthMiddleware())->handle();
+                    (new \App\Middlewares\CsrfMiddleware())->handle();
+                    (new \App\Controllers\RecepcionController())->aprobarPedidoPagina();
                 }
                 else if ($uri === '/api/pedidos/editar') {
                     (new AuthMiddleware())->handle();
@@ -271,6 +345,11 @@ class ApiRoutes
                     (new AuthMiddleware())->handle();
                     (new KanbanController())->completarPedidoAction();
                 }
+                else if ($uri === '/api/kanban/revertir') {
+                    (new AuthMiddleware())->authorizeRoles(['SuperAdmin']);
+                    (new \App\Middlewares\CsrfMiddleware())->handle();
+                    (new KanbanController())->revertirPedidoAction();
+                }
 
                 // --- REPORTES PEDIDOS ---
                 else if ($uri === '/api/reportes-pedidos/eliminar-pedidos') {
@@ -291,6 +370,26 @@ class ApiRoutes
                     (new AuthMiddleware())->handle();
                     require_once dirname(__DIR__) . '/app/controllers/SmsController.php';
                     (new \App\Controllers\SmsController())->enviarManual();
+                }
+
+                // --- CLIENTES ---
+                else if ($uriParsed === '/api/clientes/merge') {
+                    (new AuthMiddleware())->authorizeRoles(['Admin', 'SuperAdmin']);
+                    (new \App\Middlewares\CsrfMiddleware())->handle();
+                    require_once dirname(__DIR__) . '/app/controllers/ClienteController.php';
+                    (new \App\Controllers\ClienteController())->merge();
+                }
+                else if ($uriParsed === '/api/clientes/merge-all') {
+                    (new AuthMiddleware())->authorizeRoles(['Admin', 'SuperAdmin']);
+                    (new \App\Middlewares\CsrfMiddleware())->handle();
+                    require_once dirname(__DIR__) . '/app/controllers/ClienteController.php';
+                    (new \App\Controllers\ClienteController())->mergeAll();
+                }
+                else if ($uriParsed === '/api/clientes/update') {
+                    (new AuthMiddleware())->authorizeRoles(['Admin', 'SuperAdmin']);
+                    (new \App\Middlewares\CsrfMiddleware())->handle();
+                    require_once dirname(__DIR__) . '/app/controllers/ClienteController.php';
+                    (new \App\Controllers\ClienteController())->updateClient();
                 }
 
                 else {
@@ -374,6 +473,42 @@ class ApiRoutes
                     $token = substr($uri, strlen('/api/seguimiento/'));
                     (new \App\Controllers\SeguimientoController())->getProgresoAction($token);
                 }
+                // --- ARCHIVOS DE SEGUIMIENTO PUBLICO ---
+                else if (preg_match('/^\/api\/tracking-file\/(.+)$/', $uriParsed, $matches)) {
+                    $tokenToVerify = $_GET['token'] ?? '';
+                    if (empty($tokenToVerify)) {
+                        http_response_code(403);
+                        exit('Acceso denegado');
+                    }
+                    require_once dirname(__DIR__) . '/config/Database.php';
+                    $dbInstance = \Config\Database::getInstance();
+                    $stmtToken = $dbInstance->prepare("SELECT id FROM pedidos WHERE token_seguimiento = ?");
+                    $stmtToken->execute([$tokenToVerify]);
+                    if (!$stmtToken->fetch()) {
+                        http_response_code(403);
+                        exit('Token inválido');
+                    }
+                    
+                    $filename = basename($matches[1]);
+                    $filePath = dirname(__DIR__) . '/storage/uploads/' . $filename;
+                    if (!file_exists($filePath)) {
+                        http_response_code(404);
+                        echo json_encode(["status" => "error", "message" => "Archivo no encontrado."]);
+                        exit;
+                    }
+                    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                    $mime = finfo_file($finfo, $filePath);
+                    finfo_close($finfo);
+                    if (!$mime) $mime = 'application/octet-stream';
+                    
+                    header_remove('Content-Type');
+                    header('Content-Type: ' . $mime);
+                    header('Content-Length: ' . filesize($filePath));
+                    header('Content-Disposition: inline; filename="' . $filename . '"');
+                    header('Cache-Control: private, max-age=86400');
+                    readfile($filePath);
+                    exit;
+                }
                 else if ($uri === '/api/reportes/movimientos') {
                     (new AuthMiddleware())->authorizeRoles(['Admin', 'SuperAdmin']);
                     require_once dirname(__DIR__) . '/app/controllers/ReportesController.php';
@@ -391,6 +526,37 @@ class ApiRoutes
                     require_once dirname(__DIR__) . '/app/controllers/ReportesPedidosController.php';
                     (new \App\Controllers\ReportesPedidosController())->getDetallesSeguimientoAction($matches[1]);
                 }
+                
+                // --- WHATSAPP (Leer Configuración de Webhook) ---
+                else if ($uriParsed === '/api/whatsapp/config') {
+                    (new AuthMiddleware())->authorizeRoles(['Admin', 'SuperAdmin']);
+                    require_once dirname(__DIR__) . '/app/controllers/WhatsappController.php';
+                    (new \App\Controllers\WhatsappController())->getConfig();
+                }
+
+                // --- CLIENTES ---
+                else if ($uriParsed === '/api/clientes/list' || $uri === '/api/clientes/list') {
+                    (new AuthMiddleware())->authorizeRoles(['Admin', 'SuperAdmin']);
+                    require_once dirname(__DIR__) . '/app/controllers/ClienteController.php';
+                    (new \App\Controllers\ClienteController())->getList();
+                }
+
+                // --- PEDIDOS (Base de datos - todos) ---
+                else if ($uriParsed === '/api/pedidos/list') {
+                    (new AuthMiddleware())->authorizeRoles(['Admin', 'SuperAdmin', 'Gerente']);
+                    $stmt = \Config\Database::getInstance()->query("
+                        SELECT p.id, p.cliente_nombre, p.cliente_telefono, p.descripcion, 
+                               p.total, p.abonado, p.estado, p.estado_pago,
+                               p.created_at, p.fecha_entrega_esperada
+                        FROM pedidos p
+                        WHERE p.deleted_at IS NULL
+                        ORDER BY p.created_at DESC
+                        LIMIT 1000
+                    ");
+                    echo json_encode(['status' => 'success', 'data' => $stmt->fetchAll(\PDO::FETCH_ASSOC)]);
+                    exit;
+                }
+
 
                 else {
                     $this->trigger404($uri);

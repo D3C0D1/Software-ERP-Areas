@@ -162,6 +162,19 @@ $sonidoTema = $waCfgK['sonido_tema'] ?? 'cristal';
             align-items: flex-start;
         }
 
+        @media (max-width: 768px) {
+            .board-wrap {
+                flex-direction: column;
+                padding: 12px;
+                gap: 16px;
+                overflow-x: hidden;
+            }
+            .main-content {
+                padding-left: 0 !important;
+                width: 100%;
+            }
+        }
+
         .kanban-col {
             background: var(--surface);
             border: 1px solid var(--border);
@@ -171,6 +184,14 @@ $sonidoTema = $waCfgK['sonido_tema'] ?? 'cristal';
             display: flex;
             flex-direction: column;
             max-height: calc(100vh - 112px);
+        }
+
+        @media (max-width: 768px) {
+            .kanban-col {
+                width: 100% !important;
+                min-width: 100% !important;
+                max-height: none !important;
+            }
         }
 
         .col-header {
@@ -1068,12 +1089,21 @@ endif; ?>
             }
             btns += '</div>';
 
+            // Badge de fase (Trabajándolo o Preparado por)
+            var faseBadge = '';
+            if (p.fase_actual === 'proceso' && p.operador_asignado) {
+                faseBadge = '<div style="margin-top:5px;"><span class="badge" style="background:#3b82f6;color:white;font-size:0.7rem;">🛠️ Trabajándolo: ' + p.operador_asignado + '</span></div>';
+            } else if (p.fase_actual === 'preparado' && p.operador_asignado) {
+                faseBadge = '<div style="margin-top:5px;"><span class="badge" style="background:#10b981;color:white;font-size:0.7rem;">✅ Preparado por: ' + p.operador_asignado + '</span></div>';
+            }
+
             div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
                 + '<div class="card-id">#PED-' + String(p.id).padStart(4, '0') + '</div>'
                 + '<div style="text-align:right;"><span class="badge ' + pc + '">' + pl + '</span></div>'
                 + '</div>'
                 + '<div class="card-name">' + (p.cliente_nombre || '') + '</div>'
                 + '<div style="margin:5px 0 8px;">' + prioBadge + editBadge + '</div>'
+                + (faseBadge)
                 + '<div class="card-meta"><span>🕒 ' + (p.last_movement_at || '').substring(0, 16) + '</span></div>'
                 + btns;
             return div;

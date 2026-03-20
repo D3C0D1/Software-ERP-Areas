@@ -58,9 +58,16 @@ try {
     $debugInfo['PHP_VER'] = PHP_VERSION;
 
     // Buscar pedido
-    $s = $db->prepare("SELECT p.id, p.cliente_nombre, p.estado, p.fase_actual, p.area_actual_id, COALESCE(a.nombre,'Guia Generada') as area_nombre, p.token_seguimiento, p.estado_pago, p.total, p.abonado, p.created_at FROM pedidos p LEFT JOIN areas a ON p.area_actual_id=a.id WHERE p.token_seguimiento=:t");
+    $s = $db->prepare("SELECT p.id, p.descripcion, p.cliente_nombre, p.estado, p.fase_actual, p.area_actual_id, COALESCE(a.nombre,'Guia Generada') as area_nombre, p.token_seguimiento, p.estado_pago, p.total, p.abonado, p.created_at FROM pedidos p LEFT JOIN areas a ON p.area_actual_id=a.id WHERE p.token_seguimiento=:t");
     $s->execute(array('t' => $token));
     $pedidoData = $s->fetch(\PDO::FETCH_ASSOC);
+
+    $archivosData = array();
+    if ($pedidoData) {
+        $stmtArch = $db->prepare("SELECT nombre_archivo, ruta_almacenamiento, tipo_mime FROM archivos WHERE entidad_tipo='pedido' AND entidad_id=?");
+        $stmtArch->execute([$pedidoData['id']]);
+        $archivosData = $stmtArch->fetchAll(\PDO::FETCH_ASSOC);
+    }
 
     $debugInfo['tokens_totales'] = $db->query("SELECT COUNT(*) FROM pedidos WHERE token_seguimiento IS NOT NULL AND token_seguimiento != ''")->fetchColumn();
     $debugInfo['token_hex'] = bin2hex($token);
@@ -96,6 +103,7 @@ catch (Exception $e) {
 $scriptDir = dirname(isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '/seguimiento.php');
 $basePath = rtrim($scriptDir, '/') . '/public';
 $rootPath = rtrim($scriptDir, '/');
+$rootDomainPath = rtrim($scriptDir, '/'); // Para acceder a los archivos subidos si están en la raíz
 
 if (empty($fondoLogin)) {
     $fondoLogin = $rootPath . '/img/LEON.jpg';
@@ -129,6 +137,33 @@ function seguimIcono($name)
     if (strpos($n, 'empaq') !== false)
         return '&#x1F3C1;';
     return '&#x1F4E6;';
+}
+
+function getArchivoIcono($mime, $nombre) {
+    if (!$mime) {
+        $ext = strtolower(pathinfo($nombre, PATHINFO_EXTENSION));
+        // Mapeo básico por extensión si no hay mime
+        $mimeMap = [
+            'pdf' => 'application/pdf',
+            'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg',
+            'png' => 'image/png', 'gif' => 'image/gif',
+            'mp4' => 'video/mp4', 'mov' => 'video/quicktime',
+            'mp3' => 'audio/mpeg', 'wav' => 'audio/wav',
+            'zip' => 'application/zip', 'rar' => 'application/x-rar-compressed'
+        ];
+        $mime = $mimeMap[$ext] ?? 'application/octet-stream';
+    }
+    
+    $mime = strtolower($mime);
+    if (strpos($mime, 'image/') === 0) return '&#x1F5BC;'; // 🖼️
+    if (strpos($mime, 'video/') === 0) return '&#x1F3AC;'; // 🎬
+    if (strpos($mime, 'audio/') === 0) return '&#x1F3B5;'; // 🎵
+    if (strpos($mime, 'pdf') !== false) return '&#x1F4D5;'; // 📕
+    if (strpos($mime, 'zip') !== false || strpos($mime, 'rar') !== false || strpos($mime, 'compressed') !== false) return '&#x1F5DC;'; // 🗜️
+    if (strpos($mime, 'spreadsheet') !== false || strpos($mime, 'excel') !== false || strpos($mime, 'csv') !== false) return '&#x1F4CA;'; // 📊
+    if (strpos($mime, 'word') !== false || strpos($mime, 'document') !== false) return '&#x1F4D4;'; // 📔
+    
+    return '&#x1F4C4;'; // 📄 Generico
 }
 ?>
 <!DOCTYPE html>
@@ -407,6 +442,140 @@ function seguimIcono($name)
             color: #f87171;
         }
 
+        /* Boton Detalles y Modal */
+        .btn-detalles {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            margin-top: 15px;
+            padding: 8px 18px;
+            background: rgba(79, 70, 229, 0.2);
+            color: #a5b4fc;
+            border: 1px solid rgba(79, 70, 229, 0.4);
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+        }
+
+        .btn-detalles:hover {
+            background: rgba(79, 70, 229, 0.4);
+            color: #fff;
+            transform: translateY(-2px);
+        }
+
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(4px);
+            z-index: 999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .modal-overlay.show {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .modal-content {
+            background: #1e293b;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 500px;
+            padding: 24px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+            transform: scale(0.95) translateY(10px);
+            transition: all 0.3s ease;
+            text-align: left;
+        }
+
+        .modal-overlay.show .modal-content {
+            transform: scale(1) translateY(0);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 12px;
+        }
+
+        .modal-header h3 {
+            font-size: 1.25rem;
+            color: #fff;
+            margin: 0;
+        }
+
+        .modal-close {
+            background: transparent;
+            border: none;
+            color: var(--muted);
+            font-size: 1.5rem;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+
+        .modal-close:hover {
+            color: #ef4444;
+        }
+
+        .modal-body {
+            font-size: 0.95rem;
+            line-height: 1.6;
+            color: #cbd5e1;
+            max-height: 60vh;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        /* Estilo para los archivos adjuntos */
+        .adjuntos-container {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border);
+        }
+        
+        .adjunto-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 8px;
+            transition: background 0.2s;
+        }
+
+        .adjunto-item:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .adjunto-item a {
+            color: #38bdf8;
+            text-decoration: none;
+            word-break: break-all;
+            /*font-weight: 500;*/
+        }
+        
+        .adjunto-item a:hover {
+            text-decoration: underline;
+        }
+
         @keyframes pulse {
             0% {
                 transform: scale(1);
@@ -509,6 +678,7 @@ $estadoPago = $pedidoData['estado_pago'] ?? 'no_pago';
 $totalPedido = floatval($pedidoData['total'] ?? 0);
 $abonadoPedido = floatval($pedidoData['abonado'] ?? 0);
 $fechaPedido = isset($pedidoData['created_at']) ? substr($pedidoData['created_at'], 0, 10) : '';
+$descripcionPedido = !empty($pedidoData['descripcion']) ? trim($pedidoData['descripcion']) : 'Sin nota ni detalles adicionales registrados.';
 
 $steps = array();
 $steps[] = array('id' => 'recepcion', 'nombre' => 'Guia Generada', 'icono' => '&#x1F4CB;');
@@ -615,6 +785,12 @@ else {
     echo "<div style=\"{$badgeStyle}background:{$bg};color:{$color};border:1px solid {$border};\">{$lbl}</div>";
 }
 ?>
+
+    <div>
+        <button id="btnOpenDetalles" class="btn-detalles">
+            &#x1F4DC; Detalles del Pedido
+        </button>
+    </div>
 </div>
 
 <div class="timeline" id="timelineBox">
@@ -647,7 +823,57 @@ endforeach; ?>
     data-areas='<?php echo addslashes($areasJson); ?>'>
 </div>
 
+<!-- Modal Detalles del Pedido -->
+<div id="modalDetalles" class="modal-overlay">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Nota del Pedido</h3>
+            <button id="btnCloseDetalles" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <?php echo htmlspecialchars($descripcionPedido); ?>
+            
+            <?php if (!empty($archivosData)): ?>
+            <div class="adjuntos-container">
+                <h4 style="color:#a5b4fc; margin-bottom: 12px; font-size: 1rem;">&#x1F4CE; Archivos Adjuntos</h4>
+                <?php foreach ($archivosData as $archivo): 
+                    $icono = getArchivoIcono($archivo['tipo_mime'] ?? '', $archivo['nombre_archivo']);
+                ?>
+                    <div class="adjunto-item">
+                        <span style="font-size: 1.2rem;"><?php echo $icono; ?></span>
+                        <a href="<?php echo htmlspecialchars($basePath . '/api/tracking-file/' . ltrim($archivo['ruta_almacenamiento'], '/') . '?token=' . urlencode($token)); ?>" target="_blank" rel="noopener noreferrer">
+                            <?php echo htmlspecialchars($archivo['nombre_archivo']); ?>
+                        </a>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+            <?php endif; ?>
+        </div>
+    </div>
+</div>
+
 <script>
+    // Lógica del modal
+    var btnOpen = document.getElementById('btnOpenDetalles');
+    var btnClose = document.getElementById('btnCloseDetalles');
+    var modalDet = document.getElementById('modalDetalles');
+
+    if (btnOpen && btnClose && modalDet) {
+        btnOpen.addEventListener('click', function(e) {
+            e.preventDefault();
+            modalDet.classList.add('show');
+        });
+        btnClose.addEventListener('click', function(e) {
+            e.preventDefault();
+            modalDet.classList.remove('show');
+        });
+        modalDet.addEventListener('click', function(e) {
+            if (e.target === modalDet) {
+                modalDet.classList.remove('show');
+            }
+        });
+    }
+
     var jsd = document.getElementById('jsdata');
     var TOKEN = jsd.getAttribute('data-token');
     var AREAS = JSON.parse(jsd.getAttribute('data-areas').replace(/\\'/g, "'"));

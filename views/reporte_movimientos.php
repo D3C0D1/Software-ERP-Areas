@@ -40,6 +40,9 @@
             position: relative;
             z-index: 1;
         }
+        @media (max-width: 768px) {
+            .main-content { padding: 15px; }
+        }
 
         .header {
             margin-bottom: 30px;
@@ -119,7 +122,7 @@
             background: var(--surface);
             border-radius: 12px;
             border: 1px solid var(--border);
-            overflow: hidden;
+            overflow-x: auto;
             width: 100%;
         }
 
@@ -401,8 +404,19 @@
                             if (changes.length > 0) {
                                 diffsHtml = `<div class="diff-container">${changes.join('')}</div>`;
                             } else if (item.data_nueva && !item.data_anterior) {
-                                // Caso de creación
-                                diffsHtml = '<div class="diff-container"><span style="color:#34d399; font-weight:600;">[NUEVO REGISTRO COMPLETO]</span></div>';
+                                // Caso de creación: Mostrar todo lo que se insertó
+                                let newFields = [];
+                                Object.keys(newData).forEach(k => {
+                                    newFields.push(`
+                                        <div class="diff-item">
+                                            <span class="diff-label">${k.replace(/_/g, ' ')}</span>
+                                            <div class="diff-content">
+                                                <span class="val-new">${newData[k] !== undefined && newData[k] !== null ? newData[k] : 'Ø'}</span>
+                                            </div>
+                                        </div>
+                                    `);
+                                });
+                                diffsHtml = `<div class="diff-container"><div style="color:#34d399; font-weight:700; margin-bottom:8px; font-size:0.7rem;">[NUEVO REGISTRO]</div>${newFields.join('')}</div>`;
                             }
                         }
                     }

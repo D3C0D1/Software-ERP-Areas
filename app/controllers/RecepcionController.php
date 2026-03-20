@@ -48,6 +48,7 @@ class RecepcionController
                 throw new Exception("El nombre del cliente es obligatorio.");
 
             $metodoPago = in_array($input['metodo_pago'] ?? 'efectivo', ['efectivo', 'transferencia']) ? ($input['metodo_pago'] ?? 'efectivo') : 'efectivo';
+            $origen = in_array($input['origen'] ?? 'recepcion', ['recepcion', 'pagina']) ? ($input['origen'] ?? 'recepcion') : 'recepcion';
 
             // El pedido inicia en recepción, sin área de producción asignada.
             $areaId = null;
@@ -57,8 +58,8 @@ class RecepcionController
             $token = substr(str_shuffle("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"), 0, 6);
 
             $stmt = $this->db->prepare("
-                INSERT INTO pedidos (cliente_nombre, cliente_email, cliente_telefono, descripcion, area_actual_id, fase_actual, estado_pago, prioridad, abonado, total, token_seguimiento, fecha_entrega_esperada, fecha_pago, metodo_pago)
-                VALUES (:cliente, :email, :tel, :desc, :area_id, 'recepcion', :estado_pago, :prioridad, :abonado, :total, :token, :fecha_entrega_esperada, :fecha_pago, :metodo_pago)
+                INSERT INTO pedidos (cliente_nombre, cliente_email, cliente_telefono, descripcion, area_actual_id, fase_actual, estado_pago, prioridad, abonado, total, token_seguimiento, fecha_entrega_esperada, fecha_pago, metodo_pago, origen)
+                VALUES (:cliente, :email, :tel, :desc, :area_id, 'recepcion', :estado_pago, :prioridad, :abonado, :total, :token, :fecha_entrega_esperada, :fecha_pago, :metodo_pago, :origen)
             ");
             $fecha_pago = ($estadoPago === 'pago_completo' || $estadoPago === 'abono') ? date('Y-m-d H:i:s') : null;
             $stmt->execute([
@@ -74,7 +75,8 @@ class RecepcionController
                 'token' => $token,
                 'fecha_entrega_esperada' => $fecha_entrega_esperada,
                 'fecha_pago' => $fecha_pago,
-                'metodo_pago' => $metodoPago
+                'metodo_pago' => $metodoPago,
+                'origen' => $origen
             ]);
 
             $pedidoId = $this->db->lastInsertId();
@@ -213,13 +215,190 @@ class RecepcionController
     }
 
     /**
+     * Aprueba un pedido creado desde la página web pública.
+     * Completa datos faltantes (pago, prioridad, fecha entrega) y envía notificaciones.
+     */
+    public function aprobarPedidoPagina()
+    {
+        $this->validarMetodoHttp('POST');
+        $input = !empty($_POST) ? $_POST : (json_decode(file_get_contents('php://input'), true) ?? []);
+
+        try {
+            $id = intval($input['pedido_id'] ?? 0);
+            if (!$id) throw new Exception("ID de pedido inválido.");
+
+            // Verificar que el pedido existe y es de origen 'pagina'
+            $stmtChk = $this->db->prepare("SELECT * FROM pedidos WHERE id = :id AND origen = 'pagina' AND estado != 'cancelado'");
+            $stmtChk->execute(['id' => $id]);
+            $pedido = $stmtChk->fetch(PDO::FETCH_ASSOC);
+            if (!$pedido) throw new Exception("Pedido no encontrado o ya fue aprobado.");
+
+            $estadoPago = $input['estado_pago'] ?? 'no_pago';
+            $prioridad = $input['prioridad'] ?? 'normal';
+            $total = floatval($input['total'] ?? 0);
+            $abonado = floatval($input['abonado'] ?? 0);
+            $metodoPago = in_array($input['metodo_pago'] ?? 'efectivo', ['efectivo', 'transferencia']) ? ($input['metodo_pago'] ?? 'efectivo') : 'efectivo';
+            $fecha_entrega = !empty($input['fecha_entrega_esperada']) ? $input['fecha_entrega_esperada'] : null;
+            $descripcion = trim($input['descripcion'] ?? '');
+
+            // Auto-complete payment validation
+            if ($total > 0 && $abonado >= $total) {
+                $estadoPago = 'pago_completo';
+                $abonado = $total;
+            } elseif ($abonado > 0 && $estadoPago === 'no_pago') {
+                $estadoPago = 'abono';
+            }
+
+            $fecha_pago = ($estadoPago === 'pago_completo' || $estadoPago === 'abono') ? date('Y-m-d H:i:s') : null;
+
+            $this->db->beginTransaction();
+
+            // Actualizar el pedido con datos completos y cambiar origen a 'aprobado'
+            // La descripción se reemplaza completamente (edición de notas)
+            $updateFields = "estado_pago = :estado_pago, prioridad = :prioridad, total = :total, abonado = :abonado, metodo_pago = :metodo, origen = 'aprobado', fecha_pago = :fecha_pago, fecha_entrega_esperada = :fecha_entrega, descripcion = :desc";
+
+            $params = [
+                'estado_pago' => $estadoPago,
+                'prioridad' => $prioridad,
+                'total' => $total,
+                'abonado' => $abonado,
+                'metodo' => $metodoPago,
+                'fecha_pago' => $fecha_pago,
+                'fecha_entrega' => $fecha_entrega,
+                'desc' => $descripcion,
+                'id' => $id
+            ];
+
+            $stmt = $this->db->prepare("UPDATE pedidos SET $updateFields WHERE id = :id");
+            $stmt->execute($params);
+
+            $usuarioId = $_SESSION['user_id'] ?? null;
+
+            // Registrar pago en historial si aplica
+            if ($abonado > 0) {
+                $stmtHP = $this->db->prepare("INSERT INTO historial_pagos (pedido_id, monto, metodo_pago, usuario_id, observacion) VALUES (:p, :m, :met, :u, 'Pago registrado al aprobar pedido desde página web')");
+                $stmtHP->execute(['p' => $id, 'm' => $abonado, 'met' => $metodoPago, 'u' => $usuarioId]);
+            }
+
+            // --- TRATAMIENTO DE ARCHIVOS ---
+            $archivosLog = "";
+            if (!empty($_FILES['archivos']['name'][0])) {
+                $uploadDir = dirname(__DIR__, 2) . '/storage/uploads/';
+                if (!is_dir($uploadDir)) {
+                    mkdir($uploadDir, 0755, true);
+                }
+
+                $stmtArchivo = $this->db->prepare("
+                    INSERT INTO archivos (entidad_tipo, entidad_id, nombre_archivo, ruta_almacenamiento, tipo_mime, subido_por)
+                    VALUES ('pedido', :id, :nombre, :ruta, :mime, :user)
+                ");
+
+                $totalFiles = count($_FILES['archivos']['name']);
+                for ($i = 0; $i < $totalFiles; $i++) {
+                    if ($_FILES['archivos']['error'][$i] === 0) {
+                        $nombreOriginal = $_FILES['archivos']['name'][$i];
+                        $tmpName = $_FILES['archivos']['tmp_name'][$i];
+                        $mime = $_FILES['archivos']['type'][$i];
+
+                        $ext = pathinfo($nombreOriginal, PATHINFO_EXTENSION);
+                        $nombreLimpio = preg_replace("/[^a-zA-Z0-9.\-_]/", "", $nombreOriginal);
+                        $nombreDestino = 'aprob_' . $id . '_' . time() . '_' . $i . '.' . $ext;
+                        $rutaDestino = $uploadDir . $nombreDestino;
+
+                        if (move_uploaded_file($tmpName, $rutaDestino)) {
+                            $stmtArchivo->execute([
+                                'id' => $id,
+                                'nombre' => $nombreLimpio,
+                                'ruta' => $nombreDestino,
+                                'mime' => $mime,
+                                'user' => $usuarioId
+                            ]);
+                            $archivosLog .= $nombreLimpio . " ";
+                        }
+                    }
+                }
+            }
+
+            // Registrar movimiento
+            $obsLog = 'Pedido de página web aprobado desde Recepción';
+            if ($archivosLog !== "") {
+                $obsLog .= '. Archivos adjuntados: ' . $archivosLog;
+            }
+            $stmtLog = $this->db->prepare("
+                INSERT INTO movimientos_pedido (pedido_id, usuario_id, accion, observaciones)
+                VALUES (:p, :u, 'Aprobado', :obs)
+            ");
+            $stmtLog->execute(['p' => $id, 'u' => $usuarioId, 'obs' => $obsLog]);
+
+            $this->db->commit();
+
+            // Enviar SMS si está marcado
+            $telefono = $pedido['cliente_telefono'];
+            $cliente = $pedido['cliente_nombre'];
+            $token = $pedido['token_seguimiento'];
+
+            $sendSms = !empty($input['send_sms']);
+            if ($sendSms && !empty($telefono)) {
+                $stmtCfg = $this->db->query("SELECT clave, valor FROM configuracion WHERE clave IN ('sms_crear', 'empresa_nombre')");
+                $cfg = $stmtCfg->fetchAll(PDO::FETCH_KEY_PAIR);
+                $plantilla = $cfg['sms_crear'] ?? 'Hola {nombre}, tu pedido {link_seguimiento} ha sido creado. Gracias por confiar en {empresa}';
+                $empresa = $cfg['empresa_nombre'] ?? 'Banner';
+
+                $basePath2 = preg_replace('/\/public\/index\.php$/i', '', $_SERVER['SCRIPT_NAME']);
+                $enlace = $_SERVER['HTTP_HOST'] . $basePath2 . "/seguimiento.php?token=" . $token;
+                $numeroPedido = 'PED-' . str_pad($id, 4, '0', STR_PAD_LEFT);
+                $mensaje = str_replace(
+                    ['{nombre}', '{numero_pedido}', '{link_seguimiento}', '{empresa}'],
+                    [$cliente, $numeroPedido, $enlace, $empresa],
+                    $plantilla
+                );
+
+                require_once __DIR__ . '/../services/OnurixService.php';
+                $onurix = new \App\Services\OnurixService();
+                $onurix->enviarSMS($telefono, $mensaje);
+            }
+
+            // Enviar WhatsApp
+            $sendWhatsapp = !empty($input['send_whatsapp']);
+            if ($sendWhatsapp && !empty($telefono)) {
+                $stmtWaCfg = $this->db->query("SELECT clave, valor FROM configuracion WHERE clave IN ('whatsapp_activo','empresa_nombre')");
+                $waCfg = $stmtWaCfg->fetchAll(PDO::FETCH_KEY_PAIR);
+                $waActivo = ($waCfg['whatsapp_activo'] ?? '1') === '1';
+
+                if ($waActivo) {
+                    $basePath3 = preg_replace('/\/public\/index\.php$/i', '', $_SERVER['SCRIPT_NAME']);
+                    $enlaceWa = $_SERVER['HTTP_HOST'] . $basePath3 . '/seguimiento.php?token=' . $token;
+
+                    if (!isset($onurix)) {
+                        require_once __DIR__ . '/../services/OnurixService.php';
+                        $onurix = new \App\Services\OnurixService();
+                    }
+                    $onurix->enviarWhatsApp($telefono, $cliente, $enlaceWa);
+                }
+            }
+
+            // LOG AUDITORIA
+            $ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+            $stmtAudit = $this->db->prepare("INSERT INTO auditoria_logs (usuario_id, entidad_tipo, entidad_id, accion, descripcion_accion, ip_address) VALUES (?, 'pedido', ?, 'aprobar', 'Aprobó pedido de página web en Recepción', ?)");
+            $stmtAudit->execute([$usuarioId, $id, $ip]);
+
+            $this->jsonResponse(200, "Pedido aprobado exitosamente.", ['pedido_id' => $id], 'success');
+
+        } catch (Exception $e) {
+            if ($this->db->inTransaction())
+                $this->db->rollBack();
+            $this->jsonResponse(400, $e->getMessage());
+        }
+    }
+
+    /**
      * Actualiza los datos de un pedido existente.
      */
     public function update()
     {
         $this->validarMetodoHttp('POST');
-        // Solo Admin puede editar pedidos desde Recepción
-        if (($_SESSION['role'] ?? '') !== 'Admin') {
+        // Solo Admin o SuperAdmin puede editar pedidos desde Recepción
+        if (!in_array($_SESSION['role'] ?? '', ['Admin', 'SuperAdmin'])) {
             $this->jsonResponse(403, 'No tienes permiso para editar pedidos.');
             return;
         }
@@ -433,8 +612,8 @@ class RecepcionController
     public function sendToArea()
     {
         $this->validarMetodoHttp('POST');
-        // Solo Admin puede enviar pedidos a área desde Recepción
-        if (($_SESSION['role'] ?? '') !== 'Admin') {
+        // Solo Admin o SuperAdmin puede enviar pedidos a área desde Recepción
+        if (!in_array($_SESSION['role'] ?? '', ['Admin', 'SuperAdmin'])) {
             $this->jsonResponse(403, 'No tienes permiso para enviar pedidos a un área.');
             return;
         }
@@ -455,24 +634,37 @@ class RecepcionController
             if (!$areaInfo)
                 throw new Exception("El área seleccionada no existe o no está activa.");
 
-            // Verificar que el pedido existe usando su id (area_actual_id puede ser null)
-            $stmtOri = $this->db->prepare("SELECT id, area_actual_id FROM pedidos WHERE id = :id AND estado NOT IN ('cancelado','completado')");
+            // Verificar que el pedido existe usando su id
+            $stmtOri = $this->db->prepare("SELECT id, area_actual_id, estado, entregado FROM pedidos WHERE id = :id AND estado != 'cancelado'");
             $stmtOri->execute(['id' => $id]);
             $pedidoOri = $stmtOri->fetch(PDO::FETCH_ASSOC);
             if (!$pedidoOri)
-                throw new Exception("Pedido no encontrado o ya está finalizado.");
+                throw new Exception("Pedido no encontrado o ya está cancelado.");
+
+            // Si está completado, solo permitimos si NO ha sido entregado
+            if ($pedidoOri['estado'] === 'completado' && $pedidoOri['entregado'] == 1) {
+                throw new Exception("El pedido ya fue entregado al cliente, no se puede enviar a producción.");
+            }
 
             $areaOrigId = $pedidoOri['area_actual_id']; // puede ser null
+
+            // Si estaba completado, lo regresamos a pendiente
+            $nuevoEstado = ($pedidoOri['estado'] === 'completado') ? 'pendiente' : $pedidoOri['estado'];
 
             $stmt = $this->db->prepare("
                 UPDATE pedidos
                 SET area_actual_id = :area_dest,
                     fase_actual    = 'recepcion',
+                    estado         = :estado,
                     asignado_a_usuario_id = NULL,
                     last_movement_at = NOW()
                 WHERE id = :id
             ");
-            $stmt->execute(['area_dest' => $areaDestId, 'id' => $id]);
+            $stmt->execute([
+                'area_dest' => $areaDestId, 
+                'id' => $id,
+                'estado' => $nuevoEstado
+            ]);
 
             $usuarioId = $_SESSION['user_id'] ?? null;
 
@@ -515,7 +707,7 @@ class RecepcionController
     public function entregar()
     {
         $this->validarMetodoHttp('POST');
-        if (($_SESSION['role'] ?? '') !== 'Admin') {
+        if (!in_array($_SESSION['role'] ?? '', ['Admin', 'SuperAdmin'])) {
             $this->jsonResponse(403, 'Solo administradores pueden marcar pedidos como entregados.');
             return;
         }
@@ -621,7 +813,7 @@ class RecepcionController
     public function marcarPagoCompleto()
     {
         $this->validarMetodoHttp('POST');
-        if (($_SESSION['role'] ?? '') !== 'Admin') {
+        if (!in_array($_SESSION['role'] ?? '', ['Admin', 'SuperAdmin'])) {
             $this->jsonResponse(403, 'Solo administradores pueden marcar pedidos como pagados.');
             return;
         }
@@ -629,6 +821,7 @@ class RecepcionController
         $input = json_decode(file_get_contents('php://input'), true) ?? $_POST;
         try {
             $id = intval($input['pedido_id'] ?? 0);
+            $metodo = $input['metodo_pago'] ?? 'efectivo';
             if (!$id) {
                 throw new Exception("ID de pedido inválido.");
             }
@@ -644,18 +837,31 @@ class RecepcionController
                 throw new Exception("El pedido ya está marcado como pago completo.");
 
             $total = floatval($pedido['total']);
+            $abonadoActual = floatval($pedido['abonado']);
+            $restante = $total - $abonadoActual;
+
+            $this->db->beginTransaction();
 
             // Actualizar 
-            $stmt = $this->db->prepare("UPDATE pedidos SET estado_pago = 'pago_completo', abonado = :total, updated_at = NOW(), fecha_pago = NOW() WHERE id = :id");
-            $stmt->execute(['total' => $total, 'id' => $id]);
+            $stmt = $this->db->prepare("UPDATE pedidos SET estado_pago = 'pago_completo', abonado = :total, metodo_pago = :metodo, updated_at = NOW(), fecha_pago = NOW() WHERE id = :id");
+            $stmt->execute(['total' => $total, 'metodo' => $metodo, 'id' => $id]);
+
+            $usuarioId = $_SESSION['user_id'] ?? null;
+
+            // Registrar en historial si había saldo pendiente
+            if ($restante > 0) {
+                $stmtHP = $this->db->prepare("INSERT INTO historial_pagos (pedido_id, monto, metodo_pago, usuario_id, observacion) VALUES (:p, :m, :met, :u, 'Pago total completado desde Recepción')");
+                $stmtHP->execute(['p' => $id, 'm' => $restante, 'met' => $metodo, 'u' => $usuarioId]);
+            }
 
             // Registrar movimiento
-            $usuarioId = $_SESSION['user_id'] ?? null;
             $stmtLog = $this->db->prepare("
                 INSERT INTO movimientos_pedido (pedido_id, usuario_id, accion, observaciones)
-                VALUES (:p, :u, 'Pago Completo', 'Se ha marcado manualmente como pago completo.')
+                VALUES (:p, :u, 'Pago Completo', :obs)
             ");
-            $stmtLog->execute(['p' => $id, 'u' => $usuarioId]);
+            $stmtLog->execute(['p' => $id, 'u' => $usuarioId, 'obs' => "Se ha marcado como pago completo vía $metodo."]);
+
+            $this->db->commit();
 
             $this->jsonResponse(200, "Pedido marcado como pago completo.", null, 'success');
         }

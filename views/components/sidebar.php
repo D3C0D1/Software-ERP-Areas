@@ -279,22 +279,41 @@ function getIcon($name, $map)
         margin: 0;
     }
 
-    .sidebar.mode-icon .user-info {
-        padding: 0 10px 20px;
-        justify-content: center;
-    }
-
     .sidebar.mode-icon .nav-item {
-        justify-content: center;
-        padding: 12px 0;
+        justify-content: center !important;
+        padding: 15px 0 !important;
+        border-left: none !important;
     }
 
-    .sidebar.mode-hidden {
-        width: 0;
-        padding: 0;
-        border: none;
-        overflow: hidden;
-        transform: translateX(-100%);
+    .sidebar.mode-icon .nav-item svg {
+        margin: 0 !important;
+    }
+
+    .sidebar.mode-icon svg[class^="chevron"] {
+        display: none !important;
+    }
+
+    /* Ajustes específicos para móviles */
+    @media (max-width: 768px) {
+        .sidebar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            transform: translateX(-100%);
+            transition: transform 0.3s ease;
+            box-shadow: 10px 0 30px rgba(0,0,0,0.5);
+        }
+        .sidebar.mode-full {
+            transform: translateX(0);
+        }
+        .sidebar.mode-icon {
+            width: 80px;
+            transform: translateX(0);
+        }
+        .sidebar.mode-hidden {
+            transform: translateX(-100%);
+        }
     }
 
     .sidebar-overlay {
@@ -303,6 +322,13 @@ function getIcon($name, $map)
         inset: 0;
         background: rgba(0, 0, 0, 0.5);
         z-index: 9;
+        backdrop-filter: blur(2px);
+    }
+    
+    @media (max-width: 768px) {
+        .sidebar-overlay.active {
+            display: block;
+        }
     }
 </style>
 <aside class="sidebar">
@@ -319,8 +345,7 @@ endif; ?>
         style="cursor:pointer; transition: background 0.2s; border-radius: 10px; padding: 8px 24px 20px;">
         <div class="avatar" id="sidebarAvatar">
             <?php if (!empty($sidebarFoto)): ?>
-            <img src="<?= htmlspecialchars($sidebarFoto)?>
-" alt="Foto de perfil">
+            <img src="<?= htmlspecialchars($sidebarFoto)?>" alt="Foto de perfil" onerror="this.onerror=null; this.parentElement.innerHTML='<?= strtoupper(substr($sidebarNombre, 0, 1))?>';">
             <?php
 else: ?>
             <?= strtoupper(substr($sidebarNombre, 0, 1))?>
@@ -340,75 +365,296 @@ endif; ?>
         <li style="margin-bottom:15px; border-bottom:1px solid rgba(255,255,255,0.05); padding-bottom:10px;">
             <a href="<?= htmlspecialchars($sidebarBasePath)?>/dashboard"
                 class="nav-item <?=(!$currentAreaId && strpos($currentUri, 'dashboard') !== false) ? 'active' : ''?>">
-                <?= $iconMap['Dashboard']?> <span>Dashboard (Resumen)</span>
+                <?= $iconMap['Dashboard']?> <span>Monitoreo</span>
             </a>
             <a href="<?= htmlspecialchars($sidebarBasePath)?>/recepcion"
                 class="nav-item <?=(strpos($currentUri, 'recepcion') !== false) ? 'active' : ''?>">
                 <?= $iconMap['Recepción']?> <span>Recepción</span>
             </a>
-        </li>
-
-        <!-- Dinámico por área -->
-        <?php foreach ($misAreas as $area): ?>
-        <li>
-            <a href="<?= htmlspecialchars($sidebarBasePath)?>/kanban?area_id=<?= $area['id']?>"
-                class="nav-item <?=($currentAreaId == $area['id'] && strpos($currentUri, 'kanban') !== false) ? 'active' : ''?>">
-                <?php if (!empty($area['icono'])): ?>
-                <span
-                    style="font-size:1.25rem; line-height:1; flex-shrink:0; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px;">
-                    <?= $area['icono']?>
-                </span>
-                <?php
-    else: ?>
-                <?= getIcon($area['nombre'], $iconMap)?>
-                <?php
-    endif; ?>
-                <span>
-                    <?= htmlspecialchars($area['nombre'])?>
-                </span>
+            <a href="<?= htmlspecialchars($sidebarBasePath)?>/whatsapp"
+                class="nav-item <?=(strpos($currentUri, 'whatsapp') !== false) ? 'active' : ''?>">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg> <span>WhatsApp</span>
             </a>
         </li>
-        <?php
-endforeach; ?>
+
+        <!-- Dinámico por área (Desplegable Acordeón) -->
+        <li style="margin-top:5px; padding-top:5px; border-top:1px solid rgba(255,255,255,0.05);">
+            <!-- Botón Colapsable -->
+            <div class="nav-item" onclick="toggleAreasMenu(this)" style="cursor:pointer; justify-content: space-between; padding-right:20px; align-items: center;" id="btnAreasToggle">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #6EE7B7;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                    <span style="font-weight: 600;">Áreas de Trabajo</span>
+                </div>
+                <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition: transform 0.3s, color 0.3s; color:#94A3B8; <?= $currentAreaId ? 'transform: rotate(180deg);' : '' ?>"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            
+            <!-- Lista interior colapsable -->
+            <ul id="submenuAreas" style="display: <?= $currentAreaId ? 'block' : 'none' ?>; list-style:none; padding-left: 0; margin:0; margin-top:2px;">
+                <?php foreach ($misAreas as $area): ?>
+                <li>
+                    <a href="<?= htmlspecialchars($sidebarBasePath)?>/kanban?area_id=<?= $area['id']?>"
+                        class="nav-item <?=($currentAreaId == $area['id'] && strpos($currentUri, 'kanban') !== false) ? 'active' : ''?>" style="padding-left: 45px; padding-top: 10px; padding-bottom: 10px;">
+                        <?php if (!empty($area['icono'])): ?>
+                        <span
+                            style="font-size:1.1rem; line-height:1; flex-shrink:0; display: flex; align-items: center; justify-content: center; width: 20px; height: 20px;">
+                            <?= $area['icono']?>
+                        </span>
+                        <?php else: ?>
+                        <span style="display:flex; align-items:center; justify-content:center; width:20px; height:20px; transform: scale(0.85);"><?= getIcon($area['nombre'], $iconMap)?></span>
+                        <?php endif; ?>
+                        <span>
+                            <?= htmlspecialchars($area['nombre'])?>
+                        </span>
+                    </a>
+                </li>
+                <?php endforeach; ?>
+                
+                <?php if (in_array($role, ['Admin', 'SuperAdmin', 'Gerente'])): ?>
+                <li>
+                    <a href="<?= htmlspecialchars($sidebarBasePath)?>/admin-areas"
+                        class="nav-item <?=(strpos($currentUri, 'admin-areas') !== false) ? 'active' : ''?>" style="padding-left: 45px; padding-top: 10px; padding-bottom: 10px;">
+                        <span style="font-size:1.1rem; line-height:1; flex-shrink:0; display: flex; align-items: center; justify-content: center; width: 20px; height: 20px;">
+                            <?= $iconMap['Áreas']?>
+                        </span>
+                        <span>Áreas y Workflow</span>
+                    </a>
+                </li>
+                <?php endif; ?>
+            </ul>
+        </li>
+
+        <script>
+        function toggleAreasMenu(btn) {
+            const submenu = document.getElementById('submenuAreas');
+            const chevron = btn.querySelector('.chevron');
+            if(submenu.style.display === 'none' || !submenu.style.display) {
+                submenu.style.display = 'block';
+                chevron.style.transform = 'rotate(180deg)';
+                localStorage.setItem('sidebarAreas_state', 'open');
+            } else {
+                submenu.style.display = 'none';
+                chevron.style.transform = 'rotate(0deg)';
+                localStorage.setItem('sidebarAreas_state', 'closed');
+            }
+        }
+        
+        // Mantener recordado si estaba abierto o cerrado al recargar la pagina
+        document.addEventListener('DOMContentLoaded', () => {
+            const submenu = document.getElementById('submenuAreas');
+            const chevron = document.querySelector('#btnAreasToggle .chevron');
+            const state = localStorage.getItem('sidebarAreas_state');
+            if(!<?= $currentAreaId ? 'true' : 'false' ?>) {
+                if(state === 'open') {
+                    submenu.style.display = 'block';
+                    chevron.style.transform = 'rotate(180deg)';
+                }
+            }
+        });
+        </script>
+
+        <!-- Flujo de Trabajo (Desplegable Acordeón) -->
+        <li style="margin-top:5px; padding-top:5px; border-top:1px solid rgba(255,255,255,0.05);">
+            <div class="nav-item" onclick="toggleFlujoMenu(this)" style="cursor:pointer; justify-content: space-between; padding-right:20px; align-items: center;" id="btnFlujoToggle">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #f59e0b;">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                    <span style="font-weight: 600;">Flujo de Trabajo</span>
+                </div>
+                <svg class="chevron-flujo" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition: transform 0.3s, color 0.3s; color:#94A3B8; <?= (strpos($currentUri, 'flujo-trabajo') !== false || strpos($currentUri, 'base-datos-pedidos') !== false) ? 'transform: rotate(180deg);' : '' ?>"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            
+            <ul id="submenuFlujo" style="display: <?= (strpos($currentUri, 'flujo-trabajo') !== false || strpos($currentUri, 'base-datos-pedidos') !== false) ? 'block' : 'none' ?>; list-style:none; padding-left: 0; margin:0; margin-top:2px;">
+                <li>
+                    <a href="<?= htmlspecialchars($sidebarBasePath)?>/flujo-trabajo"
+                        class="nav-item <?=(strpos($currentUri, 'flujo-trabajo') !== false) ? 'active' : ''?>" style="padding-left: 45px; padding-top: 10px; padding-bottom: 10px;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect></svg>
+                        <span>Gestión Pedidos Activos</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="<?= htmlspecialchars($sidebarBasePath)?>/base-datos-pedidos"
+                        class="nav-item <?=(strpos($currentUri, 'base-datos-pedidos') !== false) ? 'active' : ''?>" style="padding-left: 45px; padding-top: 10px; padding-bottom: 10px;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+                        <span>Base de Datos Pedidos</span>
+                    </a>
+                </li>
+            </ul>
+        </li>
+
+        <script>
+        function toggleFlujoMenu(btn) {
+            const submenu = document.getElementById('submenuFlujo');
+            const chevron = btn.querySelector('.chevron-flujo');
+            if(submenu.style.display === 'none' || !submenu.style.display) {
+                submenu.style.display = 'block';
+                chevron.style.transform = 'rotate(180deg)';
+                localStorage.setItem('sidebarFlujo_state', 'open');
+            } else {
+                submenu.style.display = 'none';
+                chevron.style.transform = 'rotate(0deg)';
+                localStorage.setItem('sidebarFlujo_state', 'closed');
+            }
+        }
+        document.addEventListener('DOMContentLoaded', () => {
+            const submenu = document.getElementById('submenuFlujo');
+            const chevron = document.querySelector('#btnFlujoToggle .chevron-flujo');
+            const state = localStorage.getItem('sidebarFlujo_state');
+            const isFlujoPage = <?= (strpos($currentUri, 'flujo-trabajo') !== false || strpos($currentUri, 'base-datos-pedidos') !== false) ? 'true' : 'false' ?>;
+            if(!isFlujoPage && state === 'open') {
+                submenu.style.display = 'block';
+                chevron.style.transform = 'rotate(180deg)';
+            }
+        });
+        </script>
 
         <?php if (in_array($role, ['Admin', 'SuperAdmin', 'Gerente'])): ?>
-        <li style="margin-top:15px; border-top:1px solid rgba(255,255,255,0.05); padding-top:10px;">
-            <a href="<?= htmlspecialchars($sidebarBasePath)?>/reporte-movimientos"
-                class="nav-item <?=(strpos($currentUri, 'reporte-movimientos') !== false) ? 'active' : ''?>">
-                <?= $iconMap['Reportes'] ?? '📄'?> <span>Reportes / Auditoría</span>
-            </a>
-            <a href="<?= htmlspecialchars($sidebarBasePath)?>/reportes-pedidos"
-                class="nav-item <?=(strpos($currentUri, 'reportes-pedidos') !== false) ? 'active' : ''?>">
-                <?= $iconMap['Reportes Pedidos']?> <span>Reportes Pedidos</span>
-            </a>
-            <a href="<?= htmlspecialchars($sidebarBasePath)?>/admin-usuarios"
-                class="nav-item <?=(strpos($currentUri, 'admin-usuarios') !== false) ? 'active' : ''?>">
-                <?= $iconMap['Usuarios']?> <span>Usuarios y Accesos</span>
-            </a>
-            <a href="<?= htmlspecialchars($sidebarBasePath)?>/admin-areas"
-                class="nav-item <?=(strpos($currentUri, 'admin-areas') !== false) ? 'active' : ''?>">
-                <?= $iconMap['Áreas']?> <span>Áreas y Workflow</span>
-            </a>
+        <!-- Menú desplegable Reportes -->
+        <li style="margin-top:5px; padding-top:5px; border-top:1px solid rgba(255,255,255,0.05);">
+            <div class="nav-item" onclick="toggleReportesMenu(this)" style="cursor:pointer; justify-content: space-between; padding-right:20px; align-items: center;" id="btnReportesToggle">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #60a5fa;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                    <span style="font-weight: 600;">Reportes</span>
+                </div>
+                <svg class="chevron-reportes" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition: transform 0.3s, color 0.3s; color:#94A3B8;"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            
+            <?php
+            $isReportesActive = (strpos($currentUri, 'reporte-movimientos') !== false || strpos($currentUri, 'reportes-pedidos') !== false || strpos($currentUri, 'clientes') !== false || strpos($currentUri, 'clientes-prospectos') !== false || strpos($currentUri, 'clientes-potenciales') !== false);
+            ?>
+            <ul id="submenuReportes" style="display: <?= $isReportesActive ? 'block' : 'none' ?>; list-style:none; padding-left: 0; margin:0; margin-top:2px;">
+                <li>
+                    <a href="<?= htmlspecialchars($sidebarBasePath)?>/reporte-movimientos"
+                        class="nav-item <?=(strpos($currentUri, 'reporte-movimientos') !== false) ? 'active' : ''?>" style="padding-left: 45px; padding-top: 10px; padding-bottom: 10px;">
+                        <span style="display:flex; align-items:center; justify-content:center; width:20px; height:20px; transform: scale(0.85);"><?= $iconMap['Reportes'] ?? '📄'?></span>
+                        <span>Auditoría</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="<?= htmlspecialchars($sidebarBasePath)?>/reportes-pedidos"
+                        class="nav-item <?=(strpos($currentUri, 'reportes-pedidos') !== false) ? 'active' : ''?>" style="padding-left: 45px; padding-top: 10px; padding-bottom: 10px;">
+                        <span style="display:flex; align-items:center; justify-content:center; width:20px; height:20px; transform: scale(0.85);"><?= $iconMap['Reportes Pedidos']?></span>
+                        <span>De Pedidos</span>
+                    </a>
+                </li>
+                <?php if (in_array($role, ['Admin', 'SuperAdmin'])): ?>
+                <li>
+                    <a href="<?= htmlspecialchars($sidebarBasePath)?>/clientes"
+                        class="nav-item <?=(strpos($currentUri, 'clientes') !== false && strpos($currentUri, 'clientes-prospectos') === false && strpos($currentUri, 'clientes-potenciales') === false) ? 'active' : ''?>" style="padding-left: 45px; padding-top: 10px; padding-bottom: 10px;">
+                        <span style="display:flex; align-items:center; justify-content:center; width:20px; height:20px; transform: scale(0.85);"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg></span>
+                        <span>Vista Clientes</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="<?= htmlspecialchars($sidebarBasePath)?>/clientes-prospectos"
+                        class="nav-item <?=(strpos($currentUri, 'clientes-prospectos') !== false) ? 'active' : ''?>" style="padding-left: 45px; padding-top: 10px; padding-bottom: 10px;">
+                        <span style="display:flex; align-items:center; justify-content:center; width:20px; height:20px; transform: scale(0.85);"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20v-6M6 20V10M18 20V4"></path></svg></span>
+                        <span>Clientes prospectos</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="<?= htmlspecialchars($sidebarBasePath)?>/clientes-potenciales"
+                        class="nav-item <?=(strpos($currentUri, 'clientes-potenciales') !== false) ? 'active' : ''?>" style="padding-left: 45px; padding-top: 10px; padding-bottom: 10px;">
+                        <span style="display:flex; align-items:center; justify-content:center; width:20px; height:20px; transform: scale(0.85);"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg></span>
+                        <span>Clientes potenciales</span>
+                    </a>
+                </li>
+                <?php endif; ?>
+            </ul>
         </li>
-        <?php
-endif; ?>
+        <script>
+        function toggleReportesMenu(btn) {
+            const submenu = document.getElementById('submenuReportes');
+            const chevron = btn.querySelector('.chevron-reportes');
+            if(submenu.style.display === 'none' || !submenu.style.display) {
+                submenu.style.display = 'block';
+                chevron.style.transform = 'rotate(180deg)';
+                localStorage.setItem('sidebarReportes_state', 'open');
+            } else {
+                submenu.style.display = 'none';
+                chevron.style.transform = 'rotate(0deg)';
+                localStorage.setItem('sidebarReportes_state', 'closed');
+            }
+        }
+        document.addEventListener('DOMContentLoaded', () => {
+            const submenu = document.getElementById('submenuReportes');
+            const chevron = document.querySelector('#btnReportesToggle .chevron-reportes');
+            const state = localStorage.getItem('sidebarReportes_state');
+            const isPage = <?= $isReportesActive ? 'true' : 'false' ?>;
+            if(!isPage && state === 'open') {
+                if(submenu) submenu.style.display = 'block';
+                if(chevron) chevron.style.transform = 'rotate(180deg)';
+            }
+        });
+        </script>
+        <?php endif; ?>
 
         <?php if (in_array($role, ['Admin', 'SuperAdmin'])): ?>
-        <li style="border-top:1px solid rgba(255,255,255,0.05); padding-top:10px;">
-            <a href="<?= htmlspecialchars($sidebarBasePath)?>/contabilidad"
-                class="nav-item <?=(strpos($currentUri, 'contabilidad') !== false) ? 'active' : ''?>">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"></path>
-                </svg> <span>Contabilidad</span>
+        <!-- Menú desplegable Contabilidad -->
+        <li style="margin-top:5px; padding-top:5px; border-top:1px solid rgba(255,255,255,0.05);">
+            <div class="nav-item" onclick="toggleContaMenu(this)" style="cursor:pointer; justify-content: space-between; padding-right:20px; align-items: center;" id="btnContaToggle">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #10b981;"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"></path></svg>
+                    <span style="font-weight: 600;">Contabilidad</span>
+                </div>
+                <svg class="chevron-conta" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition: transform 0.3s, color 0.3s; color:#94A3B8;"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            
+            <?php
+            $isContaActive = (strpos($currentUri, 'contabilidad') !== false);
+            ?>
+            <ul id="submenuConta" style="display: <?= $isContaActive ? 'block' : 'none' ?>; list-style:none; padding-left: 0; margin:0; margin-top:2px;">
+                <li>
+                    <a href="<?= htmlspecialchars($sidebarBasePath)?>/contabilidad"
+                        class="nav-item <?=(strpos($currentUri, 'contabilidad') !== false) ? 'active' : ''?>" style="padding-left: 45px; padding-top: 10px; padding-bottom: 10px;">
+                         <span style="display:flex; align-items:center; justify-content:center; width:20px; height:20px; transform: scale(0.85);"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"></path></svg></span>
+                        <span>Ver Contabilidad</span>
+                    </a>
+                </li>
+            </ul>
+        </li>
+        <script>
+        function toggleContaMenu(btn) {
+            const submenu = document.getElementById('submenuConta');
+            const chevron = btn.querySelector('.chevron-conta');
+            if(submenu.style.display === 'none' || !submenu.style.display) {
+                submenu.style.display = 'block';
+                chevron.style.transform = 'rotate(180deg)';
+                localStorage.setItem('sidebarConta_state', 'open');
+            } else {
+                submenu.style.display = 'none';
+                chevron.style.transform = 'rotate(0deg)';
+                localStorage.setItem('sidebarConta_state', 'closed');
+            }
+        }
+        document.addEventListener('DOMContentLoaded', () => {
+            const submenu = document.getElementById('submenuConta');
+            const chevron = document.querySelector('#btnContaToggle .chevron-conta');
+            const state = localStorage.getItem('sidebarConta_state');
+            const isPage = <?= $isContaActive ? 'true' : 'false' ?>;
+            if(!isPage && state === 'open') {
+                if(submenu) submenu.style.display = 'block';
+                if(chevron) chevron.style.transform = 'rotate(180deg)';
+            }
+        });
+        </script>
+        <?php endif; ?>
+
+        <?php if (in_array($role, ['Admin', 'SuperAdmin', 'Gerente'])): ?>
+        <!-- Botones sueltos -->
+        <li style="margin-top:15px; border-top:1px solid rgba(255,255,255,0.05); padding-top:10px;">
+            <a href="<?= htmlspecialchars($sidebarBasePath)?>/admin-usuarios"
+                class="nav-item <?=(strpos($currentUri, 'admin-usuarios') !== false) ? 'active' : ''?>">
+                <?= $iconMap['Usuarios']?> <span>Empleados y accesos</span>
             </a>
+            <?php if (in_array($role, ['Admin', 'SuperAdmin'])): ?>
             <a href="<?= htmlspecialchars($sidebarBasePath)?>/configuracion"
                 class="nav-item <?=(strpos($currentUri, 'configuracion') !== false) ? 'active' : ''?>">
                 <?= $iconMap['Configuración']?> <span>Configuración</span>
             </a>
+            <?php endif; ?>
         </li>
-        <?php
-endif; ?>
+        <?php endif; ?>
 
         <!-- Mi Cuenta: visible para todos los roles -->
         <li style="margin-top:auto; border-top:1px solid rgba(255,255,255,0.05); padding-top:10px;">
@@ -435,10 +681,20 @@ endif; ?>
         let modes = ['mode-full', 'mode-icon', 'mode-hidden'];
         let currentMode = localStorage.getItem('sidebarMode') || 'mode-full';
 
+        const overlay = document.querySelector('.sidebar-overlay') || document.createElement('div');
+        if (!document.querySelector('.sidebar-overlay')) {
+            overlay.className = 'sidebar-overlay';
+            document.body.appendChild(overlay);
+        }
+
         function applyMode(mode) {
             sidebar.classList.remove('mode-full', 'mode-icon', 'mode-hidden');
+            overlay.classList.remove('active');
             if (mode !== 'mode-full') {
                 sidebar.classList.add(mode);
+            }
+            if (window.innerWidth <= 768 && mode !== 'mode-hidden') {
+                overlay.classList.add('active');
             }
         }
 
@@ -446,7 +702,18 @@ endif; ?>
 
         btn.addEventListener('click', () => {
             let idx = modes.indexOf(currentMode);
-            currentMode = modes[(idx + 1) % modes.length];
+            if (window.innerWidth <= 768) {
+                // En móvil solo alternamos entre full y oculto para mejor UX
+                currentMode = (currentMode === 'mode-hidden') ? 'mode-full' : 'mode-hidden';
+            } else {
+                currentMode = modes[(idx + 1) % modes.length];
+            }
+            localStorage.setItem('sidebarMode', currentMode);
+            applyMode(currentMode);
+        });
+
+        overlay.addEventListener('click', () => {
+            currentMode = 'mode-hidden';
             localStorage.setItem('sidebarMode', currentMode);
             applyMode(currentMode);
         });

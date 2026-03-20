@@ -507,7 +507,13 @@ endif; ?>
                 else if (p.estado === 'cancelado') bClase = 'badge-cancelado';
 
                 let isAdmin = <?=(in_array($_SESSION['role'] ?? '', ['Admin', 'SuperAdmin'])) ? 'true' : 'false'?>;
+                let isSuperAdmin = <?= (($_SESSION['role'] ?? '') === 'SuperAdmin') ? 'true' : 'false' ?>;
+                
                 let btnEliminar = isAdmin ? `<button class="btn btn-danger btn-sm" style="padding:4px 8px; font-size:0.75rem;" onclick="event.stopPropagation(); eliminarPedido(${p.id})">🗑 Eliminar</button>` : '';
+                
+                let btnRevertir = (isSuperAdmin && p.estado === 'completado') 
+                    ? `<button class="btn btn-warning btn-sm" style="padding:4px 8px; font-size:0.75rem; margin-right:5px; color:white;" onclick="event.stopPropagation(); revertirPedido(${p.id})">↩ Revertir</button>` 
+                    : '';
 
                 tr.innerHTML = `
                     <td onclick="event.stopPropagation()"><input type="checkbox" class="ped-check" value="${p.id}"></td>
@@ -518,7 +524,7 @@ endif; ?>
                     <td onclick="abrirSeguimiento(${p.id})">${p.created_at.split(' ')[0]}</td>
                     <td onclick="abrirSeguimiento(${p.id})">${p.adjuntos > 0 ? '📎 ' + p.adjuntos : '-'}</td>
                     <td onclick="abrirSeguimiento(${p.id})">$${parseFloat(p.total).toLocaleString()}</td>
-                    ${isAdmin ? '<td onclick="event.stopPropagation()">' + btnEliminar + '</td>' : ''}
+                    ${isAdmin ? '<td onclick="event.stopPropagation()">' + btnRevertir + btnEliminar + '</td>' : ''}
                 `;
                 tbody.appendChild(tr);
             });
@@ -627,6 +633,29 @@ endif; ?>
                 }
             } catch (e) {
                 alert('Ocurrió un error al intentar eliminar el pedido. Verifique su conexión y permisos.');
+            }
+        }
+
+        async function revertirPedido(id) {
+            if (!confirm('¿Deseas revertir el pedido #' + id + ' a estado PENDIENTE? Aparecerá nuevamente en el tablero Kanban.')) return;
+
+            try {
+                const csrf = document.querySelector('meta[name="csrf-token"]').content;
+                const r = await fetch(basePath + '/api/kanban/revertir', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pedido_id: id, csrf_token: csrf })
+                });
+                const res = await r.json();
+                if (res.status === 'success') {
+                    if (window.BannerSounds) BannerSounds.mover();
+                    alert('Pedido revertido correctamente.');
+                    cargarDatos();
+                } else {
+                    alert('Error: ' + res.message);
+                }
+            } catch (e) {
+                alert('Ocurrió un error de conexión.');
             }
         }
 

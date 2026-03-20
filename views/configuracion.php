@@ -61,6 +61,10 @@ $smsCrearCheckedDefault = $rows['sms_crear_checked_default'] ?? '1';
 $waCrearEnabled = $rows['wa_crear_enabled'] ?? '1';
 $waCrearCheckedDefault = $rows['wa_crear_checked_default'] ?? '1';
 
+// Notificaciones Internas (Jefe y Supervisor)
+$telefonoJefe = $rows['telefono_jefe'] ?? '';
+$telefonoSupervisor = $rows['telefono_supervisor'] ?? '';
+
 try {
 
     $areas = $db->query("SELECT id, nombre, icono FROM areas ORDER BY orden ASC")->fetchAll(PDO::FETCH_ASSOC);
@@ -803,6 +807,31 @@ endif; ?>
                     Notificaciones (Ambas áreas)</button>
             </div>
 
+            <!-- NOTIFICACIONES INTERNAS -->
+            <div class="section-card">
+                <div class="section-header">
+                    <div class="section-icon" style="background:rgba(245,158,11,.15);border-color:rgba(245,158,11,.3);">
+                        &#128100;</div>
+                    <div>
+                        <div class="section-title" style="color:#f59e0b;">Notificaciones Internas</div>
+                        <div class="section-sub">Configura los números telefónicos para enviar alertas rápidas de pedidos al Jefe y Supervisor.</div>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-bottom: 20px;">
+                    <label class="form-label" for="telefonoJefe" style="font-weight:700; color:#f1f5f9;">Teléfono Jefe</label>
+                    <input type="text" id="telefonoJefe" class="form-input" value="<?= htmlspecialchars($telefonoJefe) ?>" placeholder="Ej: +573001234567">
+                </div>
+
+                <div class="form-group" style="margin-bottom: 20px;">
+                    <label class="form-label" for="telefonoSupervisor" style="font-weight:700; color:#f1f5f9;">Teléfono Supervisor</label>
+                    <input type="text" id="telefonoSupervisor" class="form-input" value="<?= htmlspecialchars($telefonoSupervisor) ?>" placeholder="Ej: +573007654321">
+                </div>
+
+                <button class="btn btn-warning" onclick="guardarNotificacionesInternas()">&#128190; Guardar
+                    Notificaciones Internas</button>
+            </div>
+
             <!-- FONDOS DEL SISTEMA -->
             <div class="section-card">
                 <div class="section-header">
@@ -1413,6 +1442,34 @@ endforeach; ?>
                 if (res.status === 'success') toast('Preferencia guardada.', 'success');
                 else toast('Error: ' + res.message, 'error');
             } catch (e) { toast('Error de red.', 'error'); }
+        }
+
+        async function guardarNotificacionesInternas() {
+            var j = document.getElementById('telefonoJefe').value.trim();
+            var s = document.getElementById('telefonoSupervisor').value.trim();
+            var csrf = document.querySelector('meta[name="csrf-token"]').content;
+            
+            var payload = {
+                csrf_token: csrf,
+                telefono_jefe: j,
+                telefono_supervisor: s
+            };
+
+            try {
+                var r = await fetch(basePath + '/api/config/guardar', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify(payload) 
+                });
+                var res = await r.json();
+                if (res.status === 'success') {
+                    toast('Teléfonos guardados correctamente.', 'success');
+                } else {
+                    toast('Error: ' + res.message, 'error');
+                }
+            } catch (e) {
+                toast('Error de red.', 'error');
+            }
         }
 
         async function guardarNotificaciones() {

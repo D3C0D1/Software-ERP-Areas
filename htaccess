@@ -1,0 +1,32 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Si la petición ya viene hacia la carpeta public, no hacer nada aquí
+    RewriteRule ^public/ - [L]
+    
+    # Si la petición es hacia un archivo físico real en la raíz (index.php, setup_config.php, etc.)
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # Las rutas de storage/uploads son manejadas por el router PHP (no redirigir a public/)
+    RewriteRule ^storage/uploads/ public/index.php [QSA,L]
+
+    # Si es un asset (img, css, js, etc.) reescribirlo físicamente a public/
+    RewriteCond %{REQUEST_URI} \.(css|js|jpg|jpeg|png|gif|webp|svg|woff|woff2|ttf|eot|ico)$ [NC]
+    RewriteRule ^(.*)$ public/$1 [L]
+
+    # Redirigir TODAS las rutas dinámicas directamente al index.php
+    RewriteRule ^(.*)$ public/index.php [QSA,L]
+</IfModule>
+
+# Zona horaria Colombia para todos los archivos PHP del servidor
+<IfModule mod_php.c>
+    php_value date.timezone "America/Bogota"
+</IfModule>
+<IfModule mod_php7.c>
+    php_value date.timezone "America/Bogota"
+</IfModule>
+<IfModule mod_php8.c>
+    php_value date.timezone "America/Bogota"
+</IfModule>

@@ -247,6 +247,44 @@ class PipelineService
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
+    /**
+     * Revierte un pedido finalizado (estado 'completado') a estado 'pendiente'.
+     * Solo para uso administrativo (SuperAdmin).
+     */
+    public function revertirPedido($pedidoId, $usuarioId)
+    {
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare("SELECT area_actual_id, estado, fase_actual FROM pedidos WHERE id = :id FOR UPDATE");
+            $stmt->execute(['id' => $pedidoId]);
+            $pedido = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$pedido)
+                throw new Exception("Pedido no encontrado.");
+            if ($pedido['estado'] !== 'completado')
+                throw new Exception("El pedido no está finalizado, no se puede revertir.");
+
+            // Mover a pendiente, lo dejamos en la fase 'preparado' de su última área
+            $stmtUpdate = $this->db->prepare("
+                UPDATE pedidos 
+                SET estado = 'pendiente', 
+                    fase_actual = 'preparado', 
+                    last_movement_at = NOW() 
+                WHERE id = :id
+            ");
+            $stmtUpdate->execute(['id' => $pedidoId]);
+
+            $this->registrarMovimiento($pedidoId, $usuarioId, $pedido['area_actual_id'], "Reversión Administrativa", "El pedido ha sido reabierto por un administrador.");
+
+            $this->db->commit();
+            return true;
+        }
+        catch (Exception $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
     private function registrarMovimiento($pedidoId, $usuarioId, $areaId, $accion, $observaciones = '')
     {
         $stmt = $this->db->prepare("

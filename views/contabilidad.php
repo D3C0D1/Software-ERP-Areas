@@ -156,14 +156,27 @@ if ($groupBy === 'day') {
 $weekDays   = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 $weekFact   = [];
 $weekPagos  = [];
-$weekMonday = strtotime('monday this week');
+
+$chartWeek = $_GET['chart_week'] ?? '';
+// If user selected a specific date from the calendar picker:
+if (!empty($chartWeek) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $chartWeek)) {
+    // Get the monday of the selected date's week
+    $weekMonday = strtotime('monday this week', strtotime($chartWeek));
+    $displayDate = $chartWeek;
+} else if (!empty($chartWeek) && preg_match('/^\d{4}-W\d{2}$/', $chartWeek)) {
+    // Fallback for previous week format if present in URL
+    $parts = explode('-W', $chartWeek);
+    $weekMonday = strtotime($parts[0] . 'W' . $parts[1]);
+    $displayDate = date('Y-m-d', $weekMonday);
+} else {
+    $weekMonday = strtotime('monday this week');
+    $displayDate = date('Y-m-d', $weekMonday);
+}
+
 for ($i = 0; $i < 7; $i++) {
     $wDate = date('Y-m-d', $weekMonday + $i * 86400);
     $weekFact[]  = (float)$db->query("SELECT COALESCE(SUM(total),0) FROM pedidos WHERE DATE(created_at)='$wDate' AND estado!='cancelado'")->fetchColumn();
-    $wpPC = (float)$db->query("SELECT COALESCE(SUM(total),0) FROM pedidos WHERE DATE(created_at)='$wDate' AND estado_pago='pago_completo' AND estado!='cancelado'")->fetchColumn();
-    $wpAB = (float)$db->query("SELECT COALESCE(SUM(abonado),0) FROM pedidos WHERE DATE(created_at)='$wDate' AND estado_pago='abono' AND estado!='cancelado'")->fetchColumn();
-    $wpHist = (float)$db->query("SELECT COALESCE(SUM(h.monto),0) FROM historial_pagos h JOIN pedidos p ON p.id=h.pedido_id WHERE DATE(h.fecha_pago)='$wDate' AND p.estado!='cancelado'")->fetchColumn();
-    $weekPagos[] = $wpPC + $wpAB + $wpHist;
+    $weekPagos[] = (float)$db->query("SELECT COALESCE(SUM(h.monto),0) FROM historial_pagos h JOIN pedidos p ON p.id=h.pedido_id WHERE DATE(h.fecha_pago)='$wDate' AND p.estado!='cancelado'")->fetchColumn();
 }
 
 // ── Deudas antiguas ───────────────────────────────────────────────────────────
@@ -228,11 +241,42 @@ $pagos = $db->query(
      ORDER BY h.fecha_pago DESC LIMIT 60"
 )->fetchAll(\PDO::FETCH_ASSOC);
 
-// ── Extras ────────────────────────────────────────────────────────────────────
+// ── Extras (globales, no filtradas por período) ───────────────────────────────
 $noPagados     = (int)$db->query("SELECT COUNT(*) FROM pedidos WHERE estado_pago='no_pago' AND estado!='cancelado' AND total>0")->fetchColumn();
 $noPagadosSum  = (float)$db->query("SELECT COALESCE(SUM(total),0) FROM pedidos WHERE estado_pago='no_pago' AND estado!='cancelado' AND total>0")->fetchColumn();
 $conAbono      = (int)$db->query("SELECT COUNT(*) FROM pedidos WHERE estado_pago='abono' AND estado!='cancelado'")->fetchColumn();
 $sumaRestanteAbono = (float)$db->query("SELECT COALESCE(SUM(total-abonado),0) FROM pedidos WHERE estado_pago='abono' AND estado!='cancelado'")->fetchColumn();
+
+// ── Modal data para mini-stats (filtradas por período seleccionado) ───────────
+$modalNoPagados = $db->query(
+    "SELECT id, cliente_nombre, total, abonado, estado, created_at,
+            DATEDIFF(NOW(), created_at) AS dias
+     FROM pedidos
+     WHERE estado_pago='no_pago' AND estado!='cancelado' AND total>0
+       AND DATE(created_at) BETWEEN '$desde' AND '$hasta'
+     ORDER BY total DESC LIMIT 200"
+)->fetchAll(\PDO::FETCH_ASSOC);
+
+$modalConAbono = $db->query(
+    "SELECT id, cliente_nombre, total, abonado, estado, created_at,
+            DATEDIFF(NOW(), created_at) AS dias
+     FROM pedidos
+     WHERE estado_pago='abono' AND estado!='cancelado'
+       AND DATE(created_at) BETWEEN '$desde' AND '$hasta'
+     ORDER BY (total-abonado) DESC LIMIT 200"
+)->fetchAll(\PDO::FETCH_ASSOC);
+
+$modalRecaudo = $db->query(
+    "SELECT h.id, h.pedido_id, p.cliente_nombre, h.monto, h.metodo_pago,
+            h.observacion, h.fecha_pago,
+            u.nombre AS registrado_por
+     FROM historial_pagos h
+     JOIN pedidos p ON p.id = h.pedido_id
+     LEFT JOIN usuarios u ON u.id = h.usuario_id
+     WHERE DATE(h.fecha_pago) BETWEEN '$desde' AND '$hasta'
+       AND p.estado != 'cancelado'
+     ORDER BY h.fecha_pago DESC LIMIT 200"
+)->fetchAll(\PDO::FETCH_ASSOC);
 
 function fmt($n) { return '$' . number_format($n, 0, ',', '.'); }
 function pct($val, $max) { return $max > 0 ? min(round(($val / $max) * 100), 100) : 0; }
@@ -1147,7 +1191,7 @@ function pct($val, $max) { return $max > 0 ? min(round(($val / $max) * 100), 100
                 </div>
 
                 <!-- Cuentas por Cobrar del Período -->
-                <div class="kpi-card">
+                <div class="kpi-card" style="cursor:pointer;" onclick="openModal('modal_cxc_periodo')">
                     <div class="kpi-bg">
                         <svg width="90" height="90" fill="none" stroke="#6366f1" stroke-width="1.5" viewBox="0 0 24 24">
                             <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
@@ -1232,15 +1276,27 @@ function pct($val, $max) { return $max > 0 ? min(round(($val / $max) * 100), 100
                 <!-- Chart: Proyección Semanal (doble barra) -->
                 <div class="panel">
                     <div class="panel-hd">
-                        <div class="panel-title">
-                            <svg width="16" height="16" fill="none" stroke="#6366f1" stroke-width="2.5"
-                                viewBox="0 0 24 24">
-                                <path d="M3 3v18h18" />
-                                <path d="M18 17V9" />
-                                <path d="M13 17V5" />
-                                <path d="M8 17v-3" />
-                            </svg>
-                            Proyección de Facturación Semanal
+                        <div class="panel-title" style="display:flex;align-items:center;gap:12px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <svg width="16" height="16" fill="none" stroke="#6366f1" stroke-width="2.5"
+                                    viewBox="0 0 24 24">
+                                    <path d="M3 3v18h18" />
+                                    <path d="M18 17V9" />
+                                    <path d="M13 17V5" />
+                                    <path d="M8 17v-3" />
+                                </svg>
+                                Proyección de Facturación Semanal
+                            </div>
+                            <form method="GET" style="display:flex;align-items:center;margin:0;">
+                                <?php foreach($_GET as $k => $v): if($k!=='chart_week'): ?>
+                                <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars($v) ?>">
+                                <?php endif; endforeach; ?>
+                                <div style="position:relative; display:flex; align-items:center;">
+                                    <input type="date" name="chart_week" onchange="this.form.submit()" 
+                                        style="color: var(--text); background: rgba(255,255,255,0.05); padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); font-size: 0.78rem; outline: none; cursor: pointer; color-scheme: dark; font-family: inherit; font-weight: 500;" 
+                                        title="Seleccionar cualquier día de la semana" value="<?= htmlspecialchars($displayDate) ?>">
+                                </div>
+                            </form>
                         </div>
                         <div class="weekly-chart-legend"
                             style="font-size:.78rem;color:var(--muted);display:flex;gap:16px;">
@@ -1334,7 +1390,7 @@ function pct($val, $max) { return $max > 0 ? min(round(($val / $max) * 100), 100
 
             <!-- Stats row -->
             <div class="stats-row" style="margin-bottom:20px;">
-                <div class="stat-mini">
+                <div class="stat-mini" style="cursor:pointer;" onclick="openModal('modal_no_pagados')">
                     <div class="stat-mini-icon ico-r" style="border-radius:12px;">
                         <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"
                             viewBox="0 0 24 24">
@@ -1354,7 +1410,7 @@ function pct($val, $max) { return $max > 0 ? min(round(($val / $max) * 100), 100
                     </div>
                 </div>
 
-                <div class="stat-mini">
+                <div class="stat-mini" style="cursor:pointer;" onclick="openModal('modal_con_abono')">
                     <div class="stat-mini-icon ico-y" style="border-radius:12px;">
                         <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"
                             viewBox="0 0 24 24">
@@ -1373,7 +1429,7 @@ function pct($val, $max) { return $max > 0 ? min(round(($val / $max) * 100), 100
                     </div>
                 </div>
 
-                <div class="stat-mini">
+                <div class="stat-mini" style="cursor:pointer;" onclick="openModal('modal_recaudo')">
                     <div class="stat-mini-icon ico-b" style="border-radius:12px;">
                         <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"
                             viewBox="0 0 24 24">
@@ -1489,6 +1545,511 @@ function pct($val, $max) { return $max > 0 ? min(round(($val / $max) * 100), 100
         </div><!-- /page-body -->
     </div><!-- /main-content -->
 
+    <!-- ═══════════════════════════════════════════
+         MODALES DE DETALLE KPI
+    ═══════════════════════════════════════════ -->
+
+    <!-- MODAL 1: Ingresos del Período -->
+    <div class="modal-overlay" id="modal_ingresos" onclick="handleOverlayClick(event, 'modal_ingresos')">
+        <div class="modal-box">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <svg width="18" height="18" fill="none" stroke="#10b981" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+                    Ingresos del Período &mdash; <?= htmlspecialchars($periodoLabel) ?>
+                </div>
+                <button class="modal-close" onclick="closeModal('modal_ingresos')">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <?php if (empty($modalIngresos)): ?>
+                <div style="text-align:center;color:var(--muted);padding:40px;">Sin registros de pago en este período.</div>
+                <?php else: ?>
+                <table class="pago-table">
+                    <thead>
+                        <tr>
+                            <th>#Pedido</th>
+                            <th>Cliente</th>
+                            <th>Estado Pago</th>
+                            <th>Total</th>
+                            <th>Abonado</th>
+                            <th>Pendiente</th>
+                            <th>Fecha Pago</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach($modalIngresos as $r):
+                            $pen = (float)$r['total'] - (float)$r['abonado'];
+                        ?>
+                        <tr>
+                            <td style="font-weight:700;color:#a5b4fc;">#PED-<?= str_pad($r['id'],4,'0',STR_PAD_LEFT) ?></td>
+                            <td><?= htmlspecialchars($r['cliente_nombre']) ?></td>
+                            <td>
+                                <?php if($r['estado_pago']==='pago_completo'): ?>
+                                <span class="badge-tp bp-full">Pago Completo</span>
+                                <?php else: ?>
+                                <span class="badge-tp bp-abono">Abono</span>
+                                <?php endif; ?>
+                            </td>
+                            <td style="color:#f1f5f9;font-weight:600;"><?= fmt((float)$r['total']) ?></td>
+                            <td style="color:#10b981;font-weight:600;"><?= fmt((float)$r['abonado']) ?></td>
+                            <td style="color:<?= $pen>0?'#f59e0b':'#10b981' ?>;"><?= fmt($pen) ?></td>
+                            <td style="color:var(--muted);font-size:.8rem;"><?= $r['updated_at'] ? date('d/m/Y H:i', strtotime($r['updated_at'])) : '—' ?></td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                    <tfoot>
+                        <tr style="background:rgba(16,185,129,.06);border-top:1px solid rgba(16,185,129,.15);">
+                            <td colspan="3" style="padding:12px 14px;font-weight:700;color:#34d399;">Total recaudado</td>
+                            <td style="padding:12px 14px;font-weight:700;color:#f1f5f9;"><?= fmt(array_sum(array_column($modalIngresos,'total'))) ?></td>
+                            <td style="padding:12px 14px;font-weight:800;color:#10b981;font-size:1rem;"><?= fmt($ingresosPeriodo) ?></td>
+                            <td colspan="2"></td>
+                        </tr>
+                    </tfoot>
+                </table>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 2: Cuentas por Cobrar (Global) -->
+    <div class="modal-overlay" id="modal_cxc" onclick="handleOverlayClick(event, 'modal_cxc')">
+        <div class="modal-box">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <svg width="18" height="18" fill="none" stroke="#f59e0b" stroke-width="2.5" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    Cuentas por Cobrar — Global (<?= $cxcCount ?> pedidos)
+                </div>
+                <button class="modal-close" onclick="closeModal('modal_cxc')">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <?php if (empty($modalCxC)): ?>
+                <div style="text-align:center;color:var(--muted);padding:40px;">Sin cuentas pendientes. ¡Todo cobrado!</div>
+                <?php else: ?>
+                <table class="pago-table">
+                    <thead>
+                        <tr>
+                            <th>#Pedido</th>
+                            <th>Cliente</th>
+                            <th>Estado Pago</th>
+                            <th>Total</th>
+                            <th>Abonado</th>
+                            <th>Pendiente</th>
+                            <th>Días</th>
+                            <th>Fecha Creación</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach($modalCxC as $r):
+                            $pen = (float)$r['total'] - (float)$r['abonado'];
+                            $dias = (int)$r['dias'];
+                        ?>
+                        <tr>
+                            <td style="font-weight:700;color:#a5b4fc;">#PED-<?= str_pad($r['id'],4,'0',STR_PAD_LEFT) ?></td>
+                            <td><?= htmlspecialchars($r['cliente_nombre']) ?></td>
+                            <td>
+                                <?php if($r['estado_pago']==='no_pago'): ?>
+                                <span class="badge-tp" style="background:rgba(244,63,94,.15);color:#f43f5e;">Sin Pago</span>
+                                <?php else: ?>
+                                <span class="badge-tp bp-abono">Con Abono</span>
+                                <?php endif; ?>
+                            </td>
+                            <td style="color:#f1f5f9;font-weight:600;"><?= fmt((float)$r['total']) ?></td>
+                            <td style="color:#10b981;"><?= fmt((float)$r['abonado']) ?></td>
+                            <td style="color:#f59e0b;font-weight:700;"><?= fmt($pen) ?></td>
+                            <td style="color:<?= $dias>=10?'#f43f5e':'#f59e0b' ?>;font-weight:700;"><?= $dias ?>d</td>
+                            <td style="color:var(--muted);font-size:.8rem;"><?= date('d/m/Y', strtotime($r['created_at'])) ?></td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                    <tfoot>
+                        <tr style="background:rgba(245,158,11,.06);border-top:1px solid rgba(245,158,11,.15);">
+                            <td colspan="5" style="padding:12px 14px;font-weight:700;color:#fbbf24;">Total por cobrar</td>
+                            <td style="padding:12px 14px;font-weight:800;color:#f59e0b;font-size:1rem;"><?= fmt($cxcTotal) ?></td>
+                            <td colspan="2"></td>
+                        </tr>
+                    </tfoot>
+                </table>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 3: CxC del Período (Facturado - Ingresos) -->
+    <div class="modal-overlay" id="modal_cxc_periodo" onclick="handleOverlayClick(event, 'modal_cxc_periodo')">
+        <div class="modal-box">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <svg width="18" height="18" fill="none" stroke="#6366f1" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+                    CxC del Período — <?= htmlspecialchars($periodoLabel) ?>
+                </div>
+                <button class="modal-close" onclick="closeModal('modal_cxc_periodo')">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div style="padding:12px 20px;background:rgba(99,102,241,.08);border-bottom:1px solid rgba(99,102,241,.15);font-size:.83rem;color:#a5b4fc;">
+                    📊 Facturado: <strong><?= fmt($facturadoPeriodo) ?></strong> &nbsp;·&nbsp; Recaudado: <strong style="color:#10b981"><?= fmt($ingresosPeriodo) ?></strong> &nbsp;·&nbsp; Balance CxC: <strong style="color:#f43f5e"><?= fmt($cxcPeriodo) ?></strong>
+                </div>
+                <?php
+                    // Pedidos creados en el período que aún tienen saldo pendiente
+                    $modalCxcPeriodo = $db->query(
+                        "SELECT id, cliente_nombre, estado_pago, total, abonado, created_at, estado_pago
+                         FROM pedidos
+                         WHERE DATE(created_at) BETWEEN '$desde' AND '$hasta'
+                           AND estado!='cancelado'
+                         ORDER BY total DESC LIMIT 200"
+                    )->fetchAll(\PDO::FETCH_ASSOC);
+                ?>
+                <?php if (empty($modalCxcPeriodo)): ?>
+                <div style="text-align:center;color:var(--muted);padding:40px;">Sin pedidos en este período.</div>
+                <?php else: ?>
+                <table class="pago-table">
+                    <thead>
+                        <tr>
+                            <th>#Pedido</th>
+                            <th>Cliente</th>
+                            <th>Estado Pago</th>
+                            <th>Total Facturado</th>
+                            <th>Recaudado</th>
+                            <th>Pendiente</th>
+                            <th>Fecha</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach($modalCxcPeriodo as $r):
+                            $pen = (float)$r['total'] - (float)$r['abonado'];
+                        ?>
+                        <tr>
+                            <td style="font-weight:700;color:#a5b4fc;">#PED-<?= str_pad($r['id'],4,'0',STR_PAD_LEFT) ?></td>
+                            <td><?= htmlspecialchars($r['cliente_nombre']) ?></td>
+                            <td>
+                                <?php if($r['estado_pago']==='pago_completo'): ?>
+                                <span class="badge-tp bp-full">Pago Completo</span>
+                                <?php elseif($r['estado_pago']==='abono'): ?>
+                                <span class="badge-tp bp-abono">Con Abono</span>
+                                <?php else: ?>
+                                <span class="badge-tp" style="background:rgba(244,63,94,.15);color:#f43f5e;">Sin Pago</span>
+                                <?php endif; ?>
+                            </td>
+                            <td style="color:#f1f5f9;font-weight:600;"><?= fmt((float)$r['total']) ?></td>
+                            <td style="color:#10b981;"><?= fmt((float)$r['abonado']) ?></td>
+                            <td style="color:<?= $pen>0?'#f59e0b':'#10b981' ?>;font-weight:700;"><?= fmt($pen) ?></td>
+                            <td style="color:var(--muted);font-size:.8rem;"><?= date('d/m/Y', strtotime($r['created_at'])) ?></td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                    <tfoot>
+                        <tr style="background:rgba(99,102,241,.06);border-top:1px solid rgba(99,102,241,.15);">
+                            <td colspan="3" style="padding:12px 14px;font-weight:700;color:#a5b4fc;">Totales período</td>
+                            <td style="padding:12px 14px;font-weight:700;color:#f1f5f9;"><?= fmt($facturadoPeriodo) ?></td>
+                            <td style="padding:12px 14px;font-weight:700;color:#10b981;"><?= fmt($ingresosPeriodo) ?></td>
+                            <td style="padding:12px 14px;font-weight:800;color:#f59e0b;font-size:1rem;"><?= fmt($cxcPeriodo) ?></td>
+                            <td></td>
+                        </tr>
+                    </tfoot>
+                </table>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 4: Facturado en Período -->
+    <div class="modal-overlay" id="modal_facturado" onclick="handleOverlayClick(event, 'modal_facturado')">
+        <div class="modal-box">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <svg width="18" height="18" fill="none" stroke="#6366f1" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21.21 15.89A10 10 0 118 2.83M22 12A10 10 0 0012 2v10z"/></svg>
+                    Facturado en Período — <?= htmlspecialchars($periodoLabel) ?>
+                </div>
+                <button class="modal-close" onclick="closeModal('modal_facturado')">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <?php if (empty($modalFacturado)): ?>
+                <div style="text-align:center;color:var(--muted);padding:40px;">Sin pedidos creados en este período.</div>
+                <?php else: ?>
+                <table class="pago-table">
+                    <thead>
+                        <tr>
+                            <th>#Pedido</th>
+                            <th>Cliente</th>
+                            <th>Descripción</th>
+                            <th>Estado Pago</th>
+                            <th>Total</th>
+                            <th>Abonado</th>
+                            <th>Fecha Creación</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php
+                            // Re-fetch with description for this modal
+                            $modalFacturadoFull = $db->query(
+                                "SELECT id, cliente_nombre, descripcion, estado_pago, total, abonado, created_at
+                                 FROM pedidos
+                                 WHERE DATE(created_at) BETWEEN '$desde' AND '$hasta' AND estado!='cancelado'
+                                 ORDER BY created_at DESC LIMIT 200"
+                            )->fetchAll(\PDO::FETCH_ASSOC);
+                        ?>
+                        <?php foreach($modalFacturadoFull as $r): ?>
+                        <tr>
+                            <td style="font-weight:700;color:#a5b4fc;">#PED-<?= str_pad($r['id'],4,'0',STR_PAD_LEFT) ?></td>
+                            <td><?= htmlspecialchars($r['cliente_nombre']) ?></td>
+                            <td style="color:var(--muted);font-size:.78rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<?= htmlspecialchars($r['descripcion'] ?? '') ?>"><?= htmlspecialchars(substr($r['descripcion'] ?? '—', 0, 40)) ?></td>
+                            <td>
+                                <?php if($r['estado_pago']==='pago_completo'): ?>
+                                <span class="badge-tp bp-full">Pago Completo</span>
+                                <?php elseif($r['estado_pago']==='abono'): ?>
+                                <span class="badge-tp bp-abono">Con Abono</span>
+                                <?php else: ?>
+                                <span class="badge-tp" style="background:rgba(244,63,94,.15);color:#f43f5e;">Sin Pago</span>
+                                <?php endif; ?>
+                            </td>
+                            <td style="color:#f1f5f9;font-weight:700;"><?= fmt((float)$r['total']) ?></td>
+                            <td style="color:#10b981;"><?= fmt((float)$r['abonado']) ?></td>
+                            <td style="color:var(--muted);font-size:.8rem;"><?= date('d/m/Y H:i', strtotime($r['created_at'])) ?></td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                    <tfoot>
+                        <tr style="background:rgba(99,102,241,.06);border-top:1px solid rgba(99,102,241,.15);">
+                            <td colspan="4" style="padding:12px 14px;font-weight:700;color:#a5b4fc;">Total facturado en período</td>
+                            <td style="padding:12px 14px;font-weight:800;color:#6366f1;font-size:1rem;"><?= fmt($facturadoPeriodo) ?></td>
+                            <td colspan="2"></td>
+                        </tr>
+                    </tfoot>
+                </table>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 5: Pedidos Sin Pago -->
+    <div class="modal-overlay" id="modal_no_pagados" onclick="handleOverlayClick(event, 'modal_no_pagados')">
+        <div class="modal-box">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <svg width="18" height="18" fill="none" stroke="#f43f5e" stroke-width="2.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    Pedidos Sin Pago &mdash; <?= htmlspecialchars($periodoLabel) ?>
+                </div>
+                <button class="modal-close" onclick="closeModal('modal_no_pagados')">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div style="padding:10px 20px;background:rgba(244,63,94,.07);border-bottom:1px solid rgba(244,63,94,.15);font-size:.82rem;color:#fca5a5;">
+                    <?php $totNoPag = array_sum(array_column($modalNoPagados,'total')); ?>
+                    <?= count($modalNoPagados) ?> pedidos sin pago en el período &nbsp;·&nbsp; Total: <strong><?= fmt($totNoPag) ?></strong>
+                </div>
+                <?php if (empty($modalNoPagados)): ?>
+                <div style="text-align:center;color:var(--muted);padding:40px;">Sin pedidos sin pago en este período. ✅</div>
+                <?php else: ?>
+                <table class="pago-table">
+                    <thead>
+                        <tr>
+                            <th>#Pedido</th>
+                            <th>Cliente</th>
+                            <th>Total</th>
+                            <th>Estado</th>
+                            <th>Días</th>
+                            <th>Fecha Creación</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach($modalNoPagados as $r):
+                            $dias = (int)$r['dias'];
+                            $estadoLabel = match($r['estado']) {
+                                'completado' => 'Finalizado',
+                                'en_curso'   => 'En Proceso',
+                                default      => 'En Recepción'
+                            };
+                        ?>
+                        <tr>
+                            <td style="font-weight:700;color:#a5b4fc;">#PED-<?= str_pad($r['id'],4,'0',STR_PAD_LEFT) ?></td>
+                            <td><?= htmlspecialchars($r['cliente_nombre']) ?></td>
+                            <td style="color:#f43f5e;font-weight:700;"><?= fmt((float)$r['total']) ?></td>
+                            <td><span style="background:rgba(244,63,94,.12);color:#f87171;padding:2px 8px;border-radius:5px;font-size:.75rem;font-weight:700;"><?= $estadoLabel ?></span></td>
+                            <td style="color:<?= $dias>=10?'#f43f5e':'#f59e0b' ?>;font-weight:700;"><?= $dias ?>d</td>
+                            <td style="color:var(--muted);font-size:.8rem;"><?= date('d/m/Y', strtotime($r['created_at'])) ?></td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                    <tfoot>
+                        <tr style="background:rgba(244,63,94,.06);border-top:1px solid rgba(244,63,94,.15);">
+                            <td colspan="2" style="padding:12px 14px;font-weight:700;color:#fca5a5;">Total sin cobrar (período)</td>
+                            <td style="padding:12px 14px;font-weight:800;color:#f43f5e;font-size:1rem;"><?= fmt($totNoPag) ?></td>
+                            <td colspan="3"></td>
+                        </tr>
+                    </tfoot>
+                </table>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 6: Pedidos con Abono -->
+    <div class="modal-overlay" id="modal_con_abono" onclick="handleOverlayClick(event, 'modal_con_abono')">
+        <div class="modal-box">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <svg width="18" height="18" fill="none" stroke="#f59e0b" stroke-width="2.5" viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+                    Pedidos con Abono &mdash; <?= htmlspecialchars($periodoLabel) ?>
+                </div>
+                <button class="modal-close" onclick="closeModal('modal_con_abono')">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div style="padding:10px 20px;background:rgba(245,158,11,.07);border-bottom:1px solid rgba(245,158,11,.15);font-size:.82rem;color:#fde68a;">
+                    <?php $totPendAbono = array_sum(array_map(fn($r)=>(float)$r['total']-(float)$r['abonado'], $modalConAbono)); ?>
+                    <?= count($modalConAbono) ?> pedidos con abono en el período &nbsp;·&nbsp; Pendiente: <strong><?= fmt($totPendAbono) ?></strong>
+                </div>
+                <?php if (empty($modalConAbono)): ?>
+                <div style="text-align:center;color:var(--muted);padding:40px;">Sin pedidos con abono en este período.</div>
+                <?php else: ?>
+                <table class="pago-table">
+                    <thead>
+                        <tr>
+                            <th>#Pedido</th>
+                            <th>Cliente</th>
+                            <th>Total</th>
+                            <th>Abonado</th>
+                            <th>Pendiente</th>
+                            <th>Días</th>
+                            <th>Fecha Creación</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach($modalConAbono as $r):
+                            $pen = (float)$r['total'] - (float)$r['abonado'];
+                            $dias = (int)$r['dias'];
+                        ?>
+                        <tr>
+                            <td style="font-weight:700;color:#a5b4fc;">#PED-<?= str_pad($r['id'],4,'0',STR_PAD_LEFT) ?></td>
+                            <td><?= htmlspecialchars($r['cliente_nombre']) ?></td>
+                            <td style="color:#f1f5f9;font-weight:600;"><?= fmt((float)$r['total']) ?></td>
+                            <td style="color:#10b981;font-weight:600;"><?= fmt((float)$r['abonado']) ?></td>
+                            <td style="color:#f59e0b;font-weight:700;"><?= fmt($pen) ?></td>
+                            <td style="color:<?= $dias>=10?'#f43f5e':'#f59e0b' ?>;font-weight:700;"><?= $dias ?>d</td>
+                            <td style="color:var(--muted);font-size:.8rem;"><?= date('d/m/Y', strtotime($r['created_at'])) ?></td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                    <tfoot>
+                        <tr style="background:rgba(245,158,11,.06);border-top:1px solid rgba(245,158,11,.15);">
+                            <td colspan="4" style="padding:12px 14px;font-weight:700;color:#fde68a;">Total pendiente por cobrar</td>
+                            <td style="padding:12px 14px;font-weight:800;color:#f59e0b;font-size:1rem;"><?= fmt($totPendAbono) ?></td>
+                            <td colspan="2"></td>
+                        </tr>
+                    </tfoot>
+                </table>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 7: Recaudo del Período -->
+    <div class="modal-overlay" id="modal_recaudo" onclick="handleOverlayClick(event, 'modal_recaudo')">
+        <div class="modal-box">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <svg width="18" height="18" fill="none" stroke="#6366f1" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+                    Recaudo del Período &mdash; <?= htmlspecialchars($periodoLabel) ?>
+                </div>
+                <button class="modal-close" onclick="closeModal('modal_recaudo')">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div style="padding:10px 20px;background:rgba(99,102,241,.07);border-bottom:1px solid rgba(99,102,241,.15);font-size:.82rem;color:#a5b4fc;">
+                    <?= count($modalRecaudo) ?> transacciones en el período &nbsp;·&nbsp;
+                    💵 Efectivo: <strong><?= fmt(array_sum(array_map(fn($r)=>($r['metodo_pago']==='efectivo'||(empty($r['metodo_pago']))?(float)$r['monto']:0), $modalRecaudo))) ?></strong>
+                    &nbsp;·&nbsp;
+                    🏦 Transferencia: <strong><?= fmt(array_sum(array_map(fn($r)=>($r['metodo_pago']==='transferencia'?(float)$r['monto']:0), $modalRecaudo))) ?></strong>
+                    &nbsp;·&nbsp; Total: <strong style="color:#10b981"><?= fmt($ingresosPeriodo) ?></strong>
+                </div>
+                <?php if (empty($modalRecaudo)): ?>
+                <div style="text-align:center;color:var(--muted);padding:40px;">Sin pagos registrados en este período.</div>
+                <?php else: ?>
+                <table class="pago-table">
+                    <thead>
+                        <tr>
+                            <th>#Pedido</th>
+                            <th>Cliente</th>
+                            <th>Concepto</th>
+                            <th>Método</th>
+                            <th>Registrado por</th>
+                            <th>Fecha Pago</th>
+                            <th style="text-align:right;">Monto</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach($modalRecaudo as $r): ?>
+                        <tr>
+                            <td style="font-weight:700;color:#a5b4fc;">#PED-<?= str_pad($r['pedido_id'],4,'0',STR_PAD_LEFT) ?></td>
+                            <td><?= htmlspecialchars($r['cliente_nombre']) ?></td>
+                            <td style="color:var(--muted);font-size:.78rem;">
+                                <?php
+                                    $obs = $r['observacion'] ?? '';
+                                    if (stripos($obs,'inicial')!==false) echo 'Abono Inicial';
+                                    elseif (stripos($obs,'completo')!==false) echo 'Pago Completo';
+                                    elseif ($obs) echo htmlspecialchars(substr($obs,0,30));
+                                    else echo 'Abono';
+                                ?>
+                            </td>
+                            <td>
+                                <?php if(($r['metodo_pago']??'')=='transferencia'): ?>
+                                <span style="background:rgba(99,102,241,.15);color:#a5b4fc;padding:2px 7px;border-radius:5px;font-size:.73rem;font-weight:700;">🏦 Transfer.</span>
+                                <?php else: ?>
+                                <span style="background:rgba(16,185,129,.12);color:#34d399;padding:2px 7px;border-radius:5px;font-size:.73rem;font-weight:700;">💵 Efectivo</span>
+                                <?php endif; ?>
+                            </td>
+                            <td style="color:var(--muted);"><?= htmlspecialchars($r['registrado_por'] ?? 'Sistema') ?></td>
+                            <td style="color:var(--muted);font-size:.8rem;"><?= $r['fecha_pago'] ? date('d/m/Y H:i', strtotime($r['fecha_pago'])) : '—' ?></td>
+                            <td style="text-align:right;font-weight:700;color:#10b981;">+<?= fmt((float)$r['monto']) ?></td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                    <tfoot>
+                        <tr style="background:rgba(16,185,129,.06);border-top:1px solid rgba(16,185,129,.15);">
+                            <td colspan="6" style="padding:12px 14px;font-weight:700;color:#34d399;">Total recaudado en período</td>
+                            <td style="text-align:right;padding:12px 14px;font-weight:800;color:#10b981;font-size:1rem;"><?= fmt($ingresosPeriodo) ?></td>
+                        </tr>
+                    </tfoot>
+                </table>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- JS: Modal helpers -->
+    <script>
+        function openModal(id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.style.display = 'flex';
+            requestAnimationFrame(() => el.classList.add('active'));
+            document.body.style.overflow = 'hidden';
+        }
+        function closeModal(id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.remove('active');
+            setTimeout(() => { el.style.display = 'none'; }, 280);
+            document.body.style.overflow = '';
+        }
+        function handleOverlayClick(e, id) {
+            if (e.target === e.currentTarget) closeModal(id);
+        }
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') {
+                document.querySelectorAll('.modal-overlay.active').forEach(m => closeModal(m.id));
+            }
+        });
+    </script>
 
     <!-- Weekly Projection Chart JS -->
     <script>

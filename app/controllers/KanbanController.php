@@ -106,6 +106,9 @@ class KanbanController
     /**
      * Marca un pedido como completado (estado final).
      */
+    /**
+     * Marca un pedido como completado (estado final).
+     */
     public function completarPedidoAction()
     {
         try {
@@ -185,6 +188,31 @@ class KanbanController
             $this->jsonResponse(200, "Pedido finalizado correctamente.", null, "success");
         }
         catch (Exception $e) {
+            $this->jsonResponse(400, $e->getMessage());
+        }
+    }
+
+    /**
+     * Revierte un pedido completado a pendiente (Solo SuperAdmin).
+     */
+    public function revertirPedidoAction()
+    {
+        try {
+            $this->validarMetodoHttp('POST');
+            $input = $this->getInput();
+            if (empty($input['pedido_id'])) {
+                throw new Exception("Falta ID de pedido.");
+            }
+
+            // Validar que es SuperAdmin
+            if (($_SESSION['role'] ?? '') !== 'SuperAdmin') {
+                throw new Exception("No tienes permisos de SuperAdmin para revertir pedidos.");
+            }
+
+            $this->pipelineService->revertirPedido($input['pedido_id'], $_SESSION['user_id'] ?? null);
+            $this->jsonResponse(200, "Pedido revertido a pendiente con éxito.", null, "success");
+
+        } catch (Exception $e) {
             $this->jsonResponse(400, $e->getMessage());
         }
     }

@@ -44,7 +44,8 @@ class ConfiguracionController
                 'sms_fin_enabled', 'sms_fin_checked_default',
                 'wa_fin_enabled', 'wa_fin_checked_default',
                 'sms_crear_enabled', 'sms_crear_checked_default',
-                'wa_crear_enabled', 'wa_crear_checked_default'
+                'wa_crear_enabled', 'wa_crear_checked_default',
+                'telefono_jefe', 'telefono_supervisor'
             ];
 
             $stmt = $this->db->prepare(
